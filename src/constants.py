@@ -144,6 +144,7 @@ class AgentActivityType(EnhanceEnum):
     AGENT_STATE = auto()
     REASONING = auto()      # 思考内容（reasoning_content）
     CHAT_REPLY = auto()     # 直接发言（有 content 但无 tool_calls）
+    MESSAGE_RECEIVED = auto()  # 收到房间消息
 
 
 class AgentActivityStatus(EnhanceEnum):

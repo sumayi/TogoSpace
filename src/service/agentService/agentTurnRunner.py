@@ -181,6 +181,14 @@ class AgentTurnRunner:
             llmApiUtil.OpenAIMessage.text(llmApiUtil.OpenaiApiRole.USER, turn_prompt),
             tags=[AgentHistoryTag.ROOM_TURN_BEGIN],
         ))
+        other_msgs = [m for m in new_msgs if m.sender_id != self.gt_agent.id]
+        meta = self._base_metadata(messages=[{"sender": m.sender_display_name, "content": m.content} for m in other_msgs])
+        await agentActivityService.add_activity(
+            gt_agent=self.gt_agent,
+            activity_type=AgentActivityType.MESSAGE_RECEIVED,
+            status=AgentActivityStatus.SUCCEEDED,
+            metadata=meta,
+        )
         return 1
 
     async def _inject_immediate_messages(self, room: ChatRoom) -> None:
@@ -205,6 +213,13 @@ class AgentTurnRunner:
         logger.info(
             "即时插入新消息: agent=%s(agent_id=%d), room=%s, msgs=%d",
             self.gt_agent.name, self.gt_agent.id, room.name, len(others),
+        )
+        meta = self._base_metadata(messages=[{"sender": m.sender_display_name, "content": m.content} for m in others])
+        await agentActivityService.add_activity(
+            gt_agent=self.gt_agent,
+            activity_type=AgentActivityType.MESSAGE_RECEIVED,
+            status=AgentActivityStatus.SUCCEEDED,
+            metadata=meta,
         )
 
     async def _run_turn_loop(self, room: ChatRoom) -> None:

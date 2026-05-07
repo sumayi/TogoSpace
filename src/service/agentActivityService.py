@@ -27,6 +27,7 @@ _DEFAULT_TITLES: dict[AgentActivityType, str] = {
     AgentActivityType.COMPACT: "压缩上下文",
     AgentActivityType.REASONING: "思考",
     AgentActivityType.CHAT_REPLY: "发言",
+    AgentActivityType.MESSAGE_RECEIVED: "收到消息",
 }
 
 
@@ -55,6 +56,8 @@ class AgentActivityMeta:
     tool_call_id: str | None = None
     command: str | None = None
     tool_result: Any = None
+    # 收到消息
+    messages: list[dict] | None = None  # MESSAGE_RECEIVED: [{"sender": str, "content": str}, ...]
 
     def apply_progress(self, progress) -> None:
         """从 InferStreamProgress 更新流式进度字段。"""

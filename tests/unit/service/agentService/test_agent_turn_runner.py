@@ -78,7 +78,8 @@ async def test_pull_room_messages_syncs_to_history(turn_runner):
 
     room.get_unread_messages = AsyncMock(return_value=[msg])
 
-    count = await turn_runner.pull_room_messages_to_history(room)
+    with patch("service.agentService.agentTurnRunner.agentActivityService.add_activity", new=AsyncMock()):
+        count = await turn_runner.pull_room_messages_to_history(room)
 
     assert count == 1
     turn_runner._history.append_history_message.assert_called_once()
