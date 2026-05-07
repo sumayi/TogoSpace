@@ -228,6 +228,10 @@ class ChatRoom:
                     self._scheduler.publish_status()
                 else:
                     self._scheduler.publish_status(next_agent_id, need_scheduling=True)
+            elif (sender_id == self.OPERATOR_MEMBER_ID
+                  and not self._scheduler.is_idle()
+                  and self._scheduler.get_current_turn_agent_id() == self.OPERATOR_MEMBER_ID):
+                await self.handle_finish_request(self.OPERATOR_MEMBER_ID)
 
     async def flush_pending_immediate_messages(self) -> None:
         await self._store.flush_pending_immediate()

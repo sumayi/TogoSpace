@@ -125,28 +125,30 @@ class RoomScheduler:
     def on_message(self, sender_id: int) -> Optional[int]:
         """收到消息后更新调度状态：唤醒（若 IDLE）、标记内容、清除跳过记录。
 
+        调用方（chatRoom）在 INIT 状态下会提前 return，此处只处理 IDLE / SCHEDULING。
         返回下一位可调度 Agent；已处于 SCHEDULING 时返回 None。"""
-        if self._state in (RoomState.IDLE, RoomState.INIT):
-            logger.info("检测到房间 %s 的活动 (agent=%s)，重置轮次计数器并唤醒房间",
+        if self._state == RoomState.IDLE:
+            logger.info("检测到房间 %s 的活动 (agent=%s)，从 IDLE 唤醒调度",
                          self._key, gtAgentManager.get_agent_name(sender_id))
             if sender_id == self.OPERATOR_MEMBER_ID:
                 self._last_speaker_id = None
             self._round_count = 0
             self._current_round_skipped_set = set()
             self.current_turn_has_content = False
-            self._current_speaker_index = 0
+            # 从 IDLE 唤醒保留 speaker index，从上次停留位置继续
             self._state = RoomState.SCHEDULING
             if self._stop_if_done():
                 return None
-
             next_agent_id = self._advance_to_first_dispatchable()
+        elif self._state == RoomState.SCHEDULING:
+            next_agent_id = None
         else:
+            logger.warning("房间 %s 收到消息时处于非预期状态 %s，忽略调度处理",
+                           self._key, self._state)
             next_agent_id = None
 
         if sender_id == self.get_current_turn_agent_id():
             self.current_turn_has_content = True
-        elif sender_id != self.SYSTEM_MEMBER_ID and self._current_round_skipped_set:
-            self._current_round_skipped_set = set()
         return next_agent_id
 
     def is_idle(self) -> bool:

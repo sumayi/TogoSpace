@@ -292,7 +292,8 @@ class TestRoomTurnLogic(ServiceTestCase):
             await room.add_message(room.OPERATOR_MEMBER_ID, "wake up")
             assert room.state == RoomState.SCHEDULING
             assert room._round_count == 0
-            assert gtAgentManager.get_agent_name(room.get_current_turn_agent_id()) == "alice"
+            # 从 IDLE 唤醒时保留 speaker index，继续从 bob（最后一个处理的位置）开始
+            assert gtAgentManager.get_agent_name(room.get_current_turn_agent_id()) == "bob"
 
             turn_calls = [
                 c for c in mock_publish.call_args_list
@@ -300,7 +301,7 @@ class TestRoomTurnLogic(ServiceTestCase):
                 and c[1].get("need_scheduling")
             ]
             assert len(turn_calls) >= 1
-            assert turn_calls[-1][1]["current_turn_agent_id"] == await self._get_agent_id("alice")
+            assert turn_calls[-1][1]["current_turn_agent_id"] == await self._get_agent_id("bob")
 
     async def test_manual_stop_wakeup_by_operator(self):
         """
@@ -460,9 +461,8 @@ class TestRoomTurnLogic(ServiceTestCase):
         assert gtAgentManager.get_agent_name(room.get_current_turn_agent_id()) == SpecialAgent.OPERATOR.name
 
         with patch("service.messageBus.publish"):
+            # add_message 内部自动触发 handle_finish_request(OPERATOR)，无需显式调用
             await room.add_message(room.OPERATOR_MEMBER_ID, "hello from operator")
-            ok = await room.handle_finish_request(room.OPERATOR_MEMBER_ID)
-            assert ok is True
 
         assert gtAgentManager.get_agent_name(room.get_current_turn_agent_id()) == "alice"
 
