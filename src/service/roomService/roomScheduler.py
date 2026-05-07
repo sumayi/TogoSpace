@@ -68,8 +68,8 @@ class RoomScheduler:
 
     async def handle_finish_request(self, caller_agent_id: int) -> bool:
         """处理 Agent 的结束发言请求：校验 → 记录跳过 → 推进 → 持久化 + 发布。"""
-        if self._state == RoomState.INIT:
-            logger.warning("房间 %s 仍处于 INIT，拒绝结束轮次", self._key)
+        if self._state != RoomState.SCHEDULING:
+            logger.warning("房间 %s 状态为 %s，拒绝结束轮次", self._key, self._state.name)
             return False
 
         current_id = self.get_current_turn_agent_id()
@@ -209,8 +209,6 @@ class RoomScheduler:
 
     def _stop_if_done(self) -> bool:
         """若已到终止条件，切换到 IDLE 并广播，返回 True；否则返回 False。"""
-        if self._state == RoomState.IDLE:
-            return True
         if not self._should_stop():
             return False
         self._state = RoomState.IDLE
