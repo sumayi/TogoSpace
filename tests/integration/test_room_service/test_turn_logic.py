@@ -184,7 +184,8 @@ class TestRoomTurnLogic(ServiceTestCase):
             await room.handle_finish_request(charlie_id)
 
         assert room.state == RoomState.IDLE
-        assert room.get_current_turn_agent_id() == charlie_id
+        # 进入 IDLE 后 _current_speaker_index 重置为 None，唤醒时从 index 0 (alice) 开始
+        assert room.get_current_turn_agent_id() == alice_id
 
         with patch("service.messageBus.publish") as mock_publish:
             await room.add_message(alice_id, "hello from another room")
@@ -192,7 +193,7 @@ class TestRoomTurnLogic(ServiceTestCase):
             assert room.state == RoomState.SCHEDULING
             assert room._round_count == 0
             assert room._round_skipped_set == set()
-            assert room.get_current_turn_agent_id() == charlie_id
+            assert room.get_current_turn_agent_id() == alice_id
 
             turn_calls = [
                 c for c in mock_publish.call_args_list
@@ -200,7 +201,7 @@ class TestRoomTurnLogic(ServiceTestCase):
                 and c[1].get("need_scheduling")
             ]
             assert len(turn_calls) == 1
-            assert turn_calls[0][1]["current_turn_agent_id"] == charlie_id
+            assert turn_calls[0][1]["current_turn_agent_id"] == alice_id
 
     async def test_full_loop_advancement(self):
         """
@@ -330,8 +331,8 @@ class TestRoomTurnLogic(ServiceTestCase):
             await room.add_message(room.OPERATOR_MEMBER_ID, "wake up")
             assert room.state == RoomState.SCHEDULING
             assert room._round_count == 0
-            # 从 IDLE 唤醒时保留 speaker index，继续从 bob（最后一个处理的位置）开始
-            assert gtAgentManager.get_agent_name(room.get_current_turn_agent_id()) == "bob"
+            # 从 IDLE 唤醒时 _current_speaker_index 为 None，从 index 0 开始；OPERATOR 被跳过，alice 排第一
+            assert gtAgentManager.get_agent_name(room.get_current_turn_agent_id()) == "alice"
 
             turn_calls = [
                 c for c in mock_publish.call_args_list
@@ -339,7 +340,7 @@ class TestRoomTurnLogic(ServiceTestCase):
                 and c[1].get("need_scheduling")
             ]
             assert len(turn_calls) >= 1
-            assert turn_calls[-1][1]["current_turn_agent_id"] == await self._get_agent_id("bob")
+            assert turn_calls[-1][1]["current_turn_agent_id"] == await self._get_agent_id("alice")
 
     async def test_manual_stop_wakeup_by_operator(self):
         """
@@ -558,6 +559,98 @@ class TestRoomTurnLogic(ServiceTestCase):
 
         # 第二轮不是全员跳过，房间应继续调度
         assert room.state == RoomState.SCHEDULING
+
+    async def test_idle_wakeup_by_current_speaker_index_agent_after_max_rounds(self):
+        """
+        回归测试：群聊完成最大轮次进入 IDLE 后，_current_speaker_index 所指向的 Agent
+        发送跨房间消息时，房间应被唤醒并调度该 Agent。
+
+        Bug 路径：on_message 先检查 sender_id == current_id，若 IDLE 时恰好指针停在发送者，
+        则只设置 current_turn_has_content=True 并返回 None，房间永远不离开 IDLE 状态。
+
+        复现条件：[alice, bob] max_rounds=1 → 完成后 _current_speaker_index=0 (alice)
+                  → alice 发消息 → 触发 bug
+        """
+        room_name = "idle_wakeup_current_max_rounds"
+        agents = ["alice", "bob"]
+        room_key = f"{room_name}@{TEAM}"
+        await self.create_room(TEAM, room_name, agents, max_rounds=1)
+        room = roomService.get_room_by_key(room_key)
+        assert await room.activate_scheduling()
+
+        alice_id = await self._get_agent_id("alice")
+        bob_id = await self._get_agent_id("bob")
+
+        # 完成 max_rounds=1：alice 发言 -> bob 发言 -> 绕回首位 round_count=1 >= 1 -> IDLE
+        with patch("service.messageBus.publish"):
+            await room.add_message(alice_id, "hello")
+            await room.handle_finish_request(alice_id)
+            await room.add_message(bob_id, "world")
+            await room.handle_finish_request(bob_id)
+
+        assert room.state == RoomState.IDLE
+        # 轮次结束绕回首位，_current_speaker_index=0 指向 alice
+        assert room.get_current_turn_agent_id() == alice_id
+
+        # alice（即 _current_speaker_index 所指的人）发一条跨房间消息到此 IDLE 群聊
+        with patch("service.messageBus.publish") as mock_publish:
+            await room.add_message(alice_id, "a message from alice in another room")
+
+            # 房间应从 IDLE 唤醒进入 SCHEDULING
+            assert room.state == RoomState.SCHEDULING
+            assert room._round_count == 0
+            assert room._round_skipped_set == set()
+
+            # 应发布包含 need_scheduling=True 的调度事件
+            turn_calls = [
+                c for c in mock_publish.call_args_list
+                if c[0][0] == MessageBusTopic.ROOM_STATUS_CHANGED
+                and c[1].get("need_scheduling")
+            ]
+            assert len(turn_calls) == 1
+            assert turn_calls[0][1]["current_turn_agent_id"] == alice_id
+
+    async def test_idle_wakeup_by_current_speaker_index_agent_after_all_skip(self):
+        """
+        回归测试：全员跳过进入 IDLE 后、任意 Agent 发送跨房间消息时，房间应被唤醒。
+
+        进入 IDLE 时 _current_speaker_index 重置为 None；唤醒后从 index 0 重新开始调度。
+        此测试验证 bob（非 index 0）发消息时也能正确唤醒房间。
+        """
+        room_name = "idle_wakeup_current_all_skip"
+        agents = ["alice", "bob"]
+        room_key = f"{room_name}@{TEAM}"
+        await self.create_room(TEAM, room_name, agents, max_rounds=10)
+        room = roomService.get_room_by_key(room_key)
+        assert await room.activate_scheduling()
+
+        alice_id = await self._get_agent_id("alice")
+        bob_id = await self._get_agent_id("bob")
+
+        with patch("service.messageBus.publish"):
+            await room.handle_finish_request(alice_id)  # alice skip
+            await room.handle_finish_request(bob_id)    # bob skip -> all skipped -> IDLE
+
+        assert room.state == RoomState.IDLE
+        # 进入 IDLE 后 _current_speaker_index 为 None，get_current_turn_agent_id() 返回 index 0 (alice)
+        assert room.get_current_turn_agent_id() == alice_id
+
+        # bob 发一条跨房间消息到此 IDLE 群聊
+        with patch("service.messageBus.publish") as mock_publish:
+            await room.add_message(bob_id, "a message from bob in another room")
+
+            # 房间应从 IDLE 唤醒进入 SCHEDULING，从 index 0 (alice) 开始
+            assert room.state == RoomState.SCHEDULING
+            assert room._round_count == 0
+            assert room._round_skipped_set == set()
+
+            turn_calls = [
+                c for c in mock_publish.call_args_list
+                if c[0][0] == MessageBusTopic.ROOM_STATUS_CHANGED
+                and c[1].get("need_scheduling")
+            ]
+            assert len(turn_calls) == 1
+            assert turn_calls[0][1]["current_turn_agent_id"] == alice_id
 
     async def test_sliding_window_skip_stop(self):
         """

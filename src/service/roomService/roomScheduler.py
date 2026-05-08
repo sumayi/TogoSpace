@@ -34,7 +34,7 @@ class RoomScheduler:
         self._gt_room: GtRoom = gt_room
         self._get_read_index = get_read_index
 
-        self._current_speaker_index: int = 0
+        self._current_speaker_index: int | None = None
         self._round_count: int = 0
         self._current_round_skipped_set: set[int] = set()
         self.current_turn_has_content: bool = False
@@ -48,8 +48,8 @@ class RoomScheduler:
         return self._state
 
     @property
-    def current_speaker_index(self) -> int:
-        """当前发言人索引（供持久化等外部使用）。"""
+    def current_speaker_index(self) -> int | None:
+        """当前发言人索引（供持久化等外部使用）。IDLE 时为 None。"""
         return self._current_speaker_index
 
     def set_current_speaker_index(self, index: int | None = None) -> None:
@@ -58,7 +58,7 @@ class RoomScheduler:
         if index is not None and 0 <= index < len(self._gt_room.agent_ids):
             self._current_speaker_index = index
         else:
-            self._current_speaker_index = 0
+            self._current_speaker_index = None
         self._current_round_skipped_set = set()
         self.current_turn_has_content = False
         self._last_speaker_id = None
@@ -92,7 +92,7 @@ class RoomScheduler:
             return False
 
         logger.info(
-            "房间 %s 由 agent=%s 结束本轮行动 (has_content=%s, speaker_index=%d/%d, turn_count=%d)",
+            "房间 %s 由 agent=%s 结束本轮行动 (has_content=%s, speaker_index=%s/%d, turn_count=%d)",
             self._key, current_name,
             self.current_turn_has_content, self._current_speaker_index, len(self._gt_room.agent_ids), self._round_count,
         )
@@ -123,17 +123,13 @@ class RoomScheduler:
         if self._state != RoomState.SCHEDULING:
             return
         self.current_turn_has_content = False
+        self._current_speaker_index = None
         self._state = RoomState.IDLE
         logger.info("房间 %s 当前 turn 被人工停止，切回 IDLE 等待新消息唤醒", self._key)
         self.publish_status(current_turn_agent_id=None)
 
     def on_message(self, sender_id: int) -> Optional[int]:
         """收到消息时更新调度状态，必要时返回下一位待调度 Agent。"""
-        current_id = self.get_current_turn_agent_id()
-        if sender_id == current_id:
-            self.current_turn_has_content = True
-            return None
-
         if self._state != RoomState.SCHEDULING:
             logger.info("检测到房间 %s 的活动 (agent=%s)，重置轮次计数器并唤醒房间",
                         self._key, gtAgentManager.get_agent_name(sender_id))
@@ -144,6 +140,9 @@ class RoomScheduler:
             self._state = RoomState.SCHEDULING
             return self._advance_to_first_dispatchable()
 
+        current_id = self.get_current_turn_agent_id()
+        if sender_id == current_id:
+            self.current_turn_has_content = True
         return None
 
     def is_idle(self) -> bool:
@@ -151,10 +150,12 @@ class RoomScheduler:
 
     def get_current_turn_agent_id(self) -> int:
         assert self._gt_room.agent_ids, f"房间 {self._key} 没有任何参与者"
-        return self._gt_room.agent_ids[self._current_speaker_index]
+        idx = self._current_speaker_index if self._current_speaker_index is not None else 0
+        return self._gt_room.agent_ids[idx]
 
     def _go_next_agent(self) -> None:
-        self._current_speaker_index = (self._current_speaker_index + 1) % len(self._gt_room.agent_ids)
+        cur = self._current_speaker_index if self._current_speaker_index is not None else 0
+        self._current_speaker_index = (cur + 1) % len(self._gt_room.agent_ids)
         if self._current_speaker_index == 0:
             self._round_count += 1
         self.current_turn_has_content = False
@@ -186,6 +187,8 @@ class RoomScheduler:
 
     def _advance_to_first_dispatchable(self) -> Optional[int]:
         """从当前发言位向前推进，找到下一个可调度的 Agent。"""
+        if self._current_speaker_index is None:
+            self._current_speaker_index = 0
         while True:
             if self._stop_if_done():
                 return None
@@ -203,6 +206,7 @@ class RoomScheduler:
         """若已到终止条件，切换到 IDLE 并广播，返回 True；否则返回 False。"""
         if not self._should_stop():
             return False
+        self._current_speaker_index = None
         self._state = RoomState.IDLE
         logger.info("房间 %s 停止调度", self._key)
         self.publish_status(current_turn_agent_id=None)

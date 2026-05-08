@@ -499,7 +499,7 @@ class TestDalManagers(ServiceTestCase):
 
         read_index, speaker_index = await gtRoomManager.get_room_state(room.id)
         assert read_index is None
-        assert speaker_index == 0
+        assert speaker_index is None
 
         state = {"alice": 1, "bob": 3}
         await gtRoomManager.update_room_state(room.id, state, speaker_index=2)
@@ -509,7 +509,7 @@ class TestDalManagers(ServiceTestCase):
 
         read_index_missing, speaker_index_missing = await gtRoomManager.get_room_state(999999)
         assert read_index_missing is None
-        assert speaker_index_missing == 0
+        assert speaker_index_missing is None
 
     # ------------------------------------------------------------------
     # gtRoomManager Member Management

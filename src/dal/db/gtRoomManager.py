@@ -137,7 +137,7 @@ async def delete_room(room_id: int) -> None:
 
 
 # Room State CRUD (persistence)
-async def update_room_state(room_id: int, agent_read_index: dict[str, int], speaker_index: int = 0) -> None:
+async def update_room_state(room_id: int, agent_read_index: dict[str, int], speaker_index: int | None = None) -> None:
     """保存房间运行时状态（agent_read_index + speaker_index）。"""
     await (
         GtRoom.update(
@@ -149,11 +149,11 @@ async def update_room_state(room_id: int, agent_read_index: dict[str, int], spea
     )
 
 
-async def get_room_state(room_id: int) -> tuple[dict[str, int] | None, int]:
+async def get_room_state(room_id: int) -> tuple[dict[str, int] | None, int | None]:
     """获取房间运行时状态（agent_read_index, speaker_index）。"""
     room = await GtRoom.aio_get_or_none(GtRoom.id == room_id)
     if room is None:
-        return None, 0
+        return None, None
     return room.agent_read_index, room.speaker_index
 
 

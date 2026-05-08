@@ -49,7 +49,7 @@ class ChatRoom:
         return self._scheduler.state
 
     @property
-    def _current_speaker_index(self) -> int:
+    def _current_speaker_index(self) -> int | None:
         return self._scheduler.current_speaker_index
 
     @property
