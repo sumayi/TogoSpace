@@ -30,7 +30,7 @@ _LOCAL_TOOL_NAMES = [
     "send_chat_msg",
     "finish_chat_turn",
 ]
-_DEFAULT_REQUEST_TIMEOUT_SEC = 30
+_DEFAULT_REQUEST_TIMEOUT_SEC = 65
 _RUN_CHAT_TURN_MAX_RETRIES = 3
 _RUN_CHAT_TURN_HINT = (
     "你必须通过调用工具来行动。如果你不需要发言，或者已经完成了所有行动，"
