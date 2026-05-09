@@ -240,12 +240,19 @@ class AgentHistoryStore:
         return None
 
     def get_current_turn_start_index(self) -> int | None:
-        """从尾部向前查找最近一次未完成 turn 的起始 index。"""
+        """从尾部向前查找最近一次未完成 turn 的起始 index。
+
+        若遍历到 COMPACT_SUMMARY 仍未遇到 ROOM_TURN_FINISH，说明当前仍处于 active turn
+        中（ROOM_TURN_BEGIN 已被 compact 压缩），以 COMPACT_SUMMARY 所在 index 作为
+        turn 起点返回，确保 get_first_pending_tool_call 等方法在 compact 后仍能正常工作。
+        """
         for idx in range(len(self._items) - 1, -1, -1):
             item = self._items[idx]
             if AgentHistoryTag.ROOM_TURN_FINISH in item.tags:
                 return None
             if AgentHistoryTag.ROOM_TURN_BEGIN in item.tags:
+                return idx
+            if AgentHistoryTag.COMPACT_SUMMARY in item.tags:
                 return idx
         return None
 

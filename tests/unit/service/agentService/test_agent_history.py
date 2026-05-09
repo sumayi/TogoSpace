@@ -343,6 +343,57 @@ class TestGetFirstPendingToolCall:
         pending = history.get_first_pending_tool_call()
         assert pending is None
 
+    def test_returns_pending_tool_call_after_compact_no_room_turn_begin(self):
+        """compact 后 ROOM_TURN_BEGIN 被压缩掉，get_first_pending_tool_call 仍应返回未完成的 tool_call。
+
+        Bug 复现：compact 保留了 [COMPACT_SUMMARY, ASSISTANT:TC(2个)] 并已执行第一个工具，
+        第二个 tool_call 尚无结果。此时 get_current_turn_start_index() 因找不到
+        ROOM_TURN_BEGIN 而返回 None，导致 get_first_pending_tool_call() 误返回 None，
+        跳过 call_2 直接发起推理，造成 API 400：tool_use without tool_result。
+        """
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(
+                    llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "compact summary"),
+                    seq=0,
+                    tags=[AgentHistoryTag.COMPACT_SUMMARY],
+                ),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1", "call_2"], status=AgentHistoryStatus.SUCCESS),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_1", '{"ok": true}'),
+                    seq=2,
+                    status=AgentHistoryStatus.SUCCESS,
+                ),
+            ],
+        )
+        # call_2 尚无结果，应返回 call_2
+        pending = history.get_first_pending_tool_call()
+        assert pending is not None, "compact 后 get_first_pending_tool_call 不应返回 None（bug：ROOM_TURN_BEGIN 被压缩导致误判）"
+        assert pending.id == "call_2"
+
+    def test_get_current_turn_start_index_after_compact(self):
+        """compact 后 ROOM_TURN_BEGIN 被压缩掉，get_current_turn_start_index 应返回 COMPACT_SUMMARY 的 index。"""
+        history = AgentHistoryStore(
+            agent_id=1,
+            items=[
+                _make_item(
+                    llmApiUtil.OpenAIMessage.text(OpenaiApiRole.USER, "compact summary"),
+                    seq=0,
+                    tags=[AgentHistoryTag.COMPACT_SUMMARY],
+                ),
+                _make_assistant_tool_call_item(seq=1, tool_call_ids=["call_1"], status=AgentHistoryStatus.SUCCESS),
+                _make_item(
+                    llmApiUtil.OpenAIMessage.tool_result("call_1", '{"ok": true}'),
+                    seq=2,
+                    status=AgentHistoryStatus.SUCCESS,
+                ),
+            ],
+        )
+        idx = history.get_current_turn_start_index()
+        assert idx is not None, "compact 后仍处于 active turn，get_current_turn_start_index 不应返回 None"
+        assert idx == 0
+
 
 # ─── build_infer_messages ───────────────────────────────────
 

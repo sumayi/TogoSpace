@@ -727,12 +727,14 @@ class AgentTurnRunner:
             await self._finish_activity(compact_activity.id, status=AgentActivityStatus.FAILED, error_message="无可压缩消息")
             return False
 
+        # 摘要 token 上限动态设为上下文长度的 10%，随模型配置自动伸缩
+        compact_max_tokens = max(1, int(llm_config.context_window_tokens * 0.1))
         summary_text = await compact.compact_messages(
             messages=compact_plan.source_messages,
             system_prompt=self.system_prompt,
             model=resolved_model,
             tools=self.tool_registry.export_openai_tools(),
-            max_tokens=llm_config.compact_summary_max_tokens,
+            max_tokens=compact_max_tokens,
         )
         if summary_text is None:
             logger.warning("compact 失败：LLM 返回无效, agent_id=%d", self.gt_agent.id)

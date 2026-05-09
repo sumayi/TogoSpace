@@ -98,7 +98,7 @@ async def compact_messages(
     system_prompt: str,
     model: str,
     tools: list[llmApiUtil.OpenAITool] | None = None,
-    max_tokens: int = 2048,
+    max_tokens: int = 13107,  # 默认约为 131072 上下文长度的 10%，建议由调用方按实际 context_window_tokens 动态计算
 ) -> str | None:
     """压缩消息列表，返回已包含引导语的摘要文本，失败时返回 None。
 
@@ -107,7 +107,7 @@ async def compact_messages(
         system_prompt: 系统提示（用于正确理解上下文）
         model: 模型名称
         tools: 透传当前工具列表，以保持请求形态稳定
-        max_tokens: 摘要最大 token 数
+        max_tokens: 摘要最大 token 数，建议为 context_window_tokens 的 10%
 
     Returns:
         摘要文本（已包含引导语）或 None（压缩失败）
