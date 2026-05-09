@@ -225,6 +225,13 @@ class TspAgentDriver(AgentDriver):
         except Exception as e:
             # 工具执行过程中可能因 gtsp 再次退出而失败，记录日志
             logger.warning("TSP 工具执行异常: agent_id=%s, tool=%s, error=%s", self.host.gt_agent.id, function_name, e)
+            # 精确识别连接断开类错误：stdout 关闭或请求超时，主动清空 client 以便下次调用触发重连
+            # 业务类异常（TSPException 等）不应断开连接
+            err_str = str(e)
+            if isinstance(e, (RuntimeError, TimeoutError)) and (
+                "TSP stdout closed" in err_str or "TSP request timeout" in err_str
+            ):
+                self._client = None
             return {"success": False, "message": f"TSP 工具调用失败: {e}"}
 
     def _load_tsp_tools(self, tools: list[Any]) -> None:
