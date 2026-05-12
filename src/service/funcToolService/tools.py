@@ -225,7 +225,7 @@ async def get_agent_info(agent_name: Optional[str] = None, _context: ToolCallCon
         if first_task is not None:
             info["error_summary"] = _truncate_error_message(first_task.error_message)
         if detail:
-            info["role"] = "manager" if dept is not None and dept.manager_id == agent_id else "member"
+            info["position"] = "manager" if dept is not None and dept.manager_id == agent_id else "member"
             info["rooms"] = [
                 room.name
                 for room in roomService.get_all_rooms()
@@ -275,7 +275,7 @@ async def wake_up_agent(agent_name: str, _context: ToolCallContext = None) -> di
 async def list_role_templates(keywords: list[str] | None = None, _context: ToolCallContext = None) -> dict:
     """查询全部角色模板列表。
 
-    返回精简字段，不包含 soul；display_name 从 i18n.display_name 解析。
+    返回精简字段，不包含 soul；display_name 为当前语言下的名称。
 
     Args:
         keywords: 可选，关键词搜索列表。若提供，则仅返回名称或 soul 中包含这些词的模板。

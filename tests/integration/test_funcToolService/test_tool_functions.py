@@ -290,7 +290,7 @@ class TestToolFunctions(ServiceTestCase):
         assert "llm provider unavailable" in failed_entry["error_summary"]
         assert detail_result["success"]
         assert detail_result["agent"]["department"] == "ops"
-        assert detail_result["agent"]["role"] == "member"
+        assert detail_result["agent"]["position"] == "member"
         assert "ops-room" in detail_result["agent"]["rooms"]
         assert detail_result["agent"]["can_wake_up"] is True
         assert wake_result["success"]
