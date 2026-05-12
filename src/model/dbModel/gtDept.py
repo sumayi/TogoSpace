@@ -42,24 +42,21 @@ class GtDept(DbModelBase):
             result["children"] = [child.to_json() for child in self.children]
         return result
 
-    def validate_and_collect_tree_ids(self) -> tuple[set[int], set[int]]:
+    def validate_tree(self) -> None:
         if len(self.agent_ids) < 2:
             raise ValueError(f"部门 '{self.name}' 成员不足 2 人，无法创建房间")
 
-        agent_ids: set[int] = set(self.agent_ids)
-        dept_ids: set[int] = self.collect_dept_ids()
-
         for child in self.children:
-            child_agent_ids, _ = child.validate_and_collect_tree_ids()
-            agent_ids.update(child_agent_ids)
+            child.validate_tree()
 
-        return agent_ids, dept_ids
-
-    def collect_dept_ids(self) -> set[int]:
+    def collect_dept_and_agent_ids(self) -> tuple[set[int], set[int]]:
+        agent_ids: set[int] = set(self.agent_ids)
         dept_ids: set[int] = {self.id} if self.id is not None else set()
         for child in self.children:
-            dept_ids.update(child.collect_dept_ids())
-        return dept_ids
+            child_agent_ids, child_dept_ids = child.collect_dept_and_agent_ids()
+            agent_ids.update(child_agent_ids)
+            dept_ids.update(child_dept_ids)
+        return agent_ids, dept_ids
 
     def collect_room_specs(self) -> list[DeptRoomSpec]:
         room_specs: list[DeptRoomSpec] = []

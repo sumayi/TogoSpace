@@ -40,6 +40,7 @@ async def restore_team(
         logger.info("跳过恢复已停用 Team 的运行时: team=%s", team.name)
         return
 
+    await _sync_team_agent_status_with_dept_tree(team.id)
     await agentService.load_team_agents(team.id, workspace_root=workspace_root)
     await roomService.load_team_rooms(team.id)
     await agentService.restore_team_agents_runtime_state(
@@ -77,6 +78,16 @@ async def hot_reload_team(name: str) -> None:
     logger.info("Team '%s' 热更新后已触发调度启动", name)
 
     logger.info(f"Team '{name}' 热更新完成")
+
+
+async def _sync_team_agent_status_with_dept_tree(team_id: int) -> None:
+    """按当前部门树同步成员在岗状态，避免未入组织树的成员进入运行时。"""
+    dept_root = await deptService.get_dept_tree(team_id)
+    if dept_root is None:
+        return
+
+    on_board_agent_ids, _ = dept_root.collect_dept_and_agent_ids()
+    await agentService.overwrite_team_agent_employ_status(team_id, on_board_agent_ids)
 
 
 async def create_team(

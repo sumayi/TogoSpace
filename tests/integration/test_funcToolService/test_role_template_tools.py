@@ -1,13 +1,14 @@
 """integration tests for role template management tools"""
 import os
 import sys
+from unittest.mock import AsyncMock
 from typing import Optional
 
 import service.agentService as agentService
 import service.ormService as ormService
 import service.persistenceService as persistenceService
 import service.roomService as roomService
-from constants import RoleTemplateType, ToolCategory
+from constants import EmployStatus, RoleTemplateType, ToolCategory
 from dal.db import gtAgentManager, gtRoleTemplateManager, gtTeamManager
 from model.dbModel.gtAgent import GtAgent
 from model.dbModel.gtRoleTemplate import GtRoleTemplate
@@ -28,6 +29,7 @@ from service.funcToolService.tools import (
     delete_role_template,
     get_role_template,
     list_role_templates,
+    reload_team,
     save_agent,
     save_role_template,
     wake_up_agent,
@@ -52,6 +54,7 @@ class TestRoleTemplateToolMetadata(ServiceTestCase):
         """role template 管理工具应加入注册表。"""
         load_func_tools()
         assert {
+            "reload_team",
             "list_role_templates",
             "get_role_template",
             "save_agent",
@@ -64,11 +67,13 @@ class TestRoleTemplateToolMetadata(ServiceTestCase):
         tools = build_tools([
             FuncTool("list_role_templates", list_role_templates),
             FuncTool("get_role_template", get_role_template),
+            FuncTool("reload_team", reload_team),
             FuncTool("save_agent", save_agent),
             FuncTool("save_role_template", save_role_template),
             FuncTool("delete_role_template", delete_role_template),
         ])
         assert {tool.function.name for tool in tools} == {
+            "reload_team",
             "list_role_templates",
             "get_role_template",
             "save_agent",
@@ -83,9 +88,11 @@ class TestRoleTemplateToolMetadata(ServiceTestCase):
             registry.register(t, lambda x, y: None)
         
         list_tool = registry.get_registered_tool("list_role_templates")
+        reload_tool = registry.get_registered_tool("reload_team")
         save_agent_tool = registry.get_registered_tool("save_agent")
         save_tool = registry.get_registered_tool("save_role_template")
         assert list_tool.category == ToolCategory.ADMIN
+        assert reload_tool.category == ToolCategory.ADMIN
         assert save_agent_tool.category == ToolCategory.ADMIN
         assert save_tool.category == ToolCategory.ADMIN
 
@@ -190,6 +197,18 @@ class TestRoleTemplateTools(ServiceTestCase):
         assert detail_result["success"]
         assert detail_result["role_template"]["soul"] == "plan carefully"
         assert detail_result["role_template"]["type"] == "USER"
+
+    async def test_reload_team_uses_current_team_context(self, monkeypatch) -> None:
+        """reload_team 应基于当前 team 上下文触发 team 级热重载。"""
+        hot_reload_team = AsyncMock()
+        monkeypatch.setattr("service.teamService.hot_reload_team", hot_reload_team)
+
+        ctx = ToolCallContext(agent_id=1, team_id=self.team_id, chat_room=None)
+        result = await reload_team(_context=ctx)
+
+        assert result["success"] is True
+        assert result["team_name"] == TEAM
+        hot_reload_team.assert_awaited_once_with(TEAM)
 
     async def test_list_role_templates_with_search(self) -> None:
         """list_role_templates 应支持关键词搜索 (OR 逻辑，支持 i18n)。"""
@@ -370,8 +389,10 @@ class TestRoleTemplateTools(ServiceTestCase):
         assert "已创建成员 charlie" in create_result["message"]
         assert update_result["success"]
         assert "已更新成员 charlie" in update_result["message"]
-        detail = await gtAgentManager.get_agent(self.team_id, "charlie")
+        detail = await gtAgentManager.get_agent(self.team_id, "charlie", status=None)
         assert detail is not None
+        assert create_result["agent"]["employ_status"] == "OFF_BOARD"
+        assert detail.employ_status == EmployStatus.OFF_BOARD
         assert detail.role_template_id == create_result["agent"]["role_template_id"]
         assert detail.model == "gpt-4.1"
         assert detail.driver.value == "claude_sdk"
@@ -401,6 +422,7 @@ class TestRoleTemplateTools(ServiceTestCase):
         )
 
         assert first["success"]
+        assert first["agent"]["employ_status"] == "OFF_BOARD"
         assert not second["success"]
         assert "overwrite_existing" in second["message"]
 

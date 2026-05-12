@@ -173,46 +173,65 @@ class TestAgentCreateAndQuery(_agentServiceCase):
 
 
 class TestSetTeamEnabledSkipsOffBoard(_agentServiceCase):
-    """单独测试类：验证启用团队时只加载在职 agent。
+    """单独测试类：验证启用团队时会按部门树同步在岗状态并恢复运行时。
 
-    注意：此测试需要独立的测试类，避免 TestAgentCreateAndQuery 中其他测试对 alice employ_status
-    的修改（如 test_get_agent_returns_on_board_agent_by_default 创建同名在职 alice）污染运行时状态。
+    注意：此测试需要独立的测试类，避免其他测试对 employ_status 的修改污染运行时状态。
     """
 
-    async def test_set_team_enabled_skips_off_board_agents(self):
-        """启用团队时，_load_team_agents 应只加载在职 agent，不因离职 agent 构建 prompt 失败。"""
+    async def test_set_team_enabled_syncs_member_status_from_dept_tree(self):
+        """启用团队时，部门树内成员会被重新同步为在职并恢复到运行时。"""
         team = await gtTeamManager.get_team(TEAM)
         assert team is not None
 
-        # 获取 alice 的在职记录，然后设为离职
+        # 手工把部门树内成员标成离职，模拟脏数据
         alice = await gtAgentManager.get_agent(team.id, "alice")
         assert alice is not None
         alice.employ_status = EmployStatus.OFF_BOARD
         await alice.aio_save()
 
-        # 确保有一个在职的 bob
-        bob = await gtAgentManager.get_agent(team.id, "bob")
-        assert bob is not None
-        assert bob.employ_status == EmployStatus.ON_BOARD
-
-        # 先禁用团队（会 unload 所有 agent）
         await teamService.set_team_enabled(team.id, False)
         runtime_agents = agentService.get_team_agents(team.id)
-        assert len(runtime_agents) == 0  # 团队禁用后运行时应该没有 agent
+        assert len(runtime_agents) == 0
 
-        # 启用团队 - 应该只加载在职 agent，不会因离职的 alice 失败
         await teamService.set_team_enabled(team.id, True)
 
-        # 验证只有在职 agent 被加载到运行时
+        alice_after = await gtAgentManager.get_agent(team.id, "alice")
+        assert alice_after is not None
+        assert alice_after.employ_status == EmployStatus.ON_BOARD
+
         runtime_agents = agentService.get_team_agents(team.id)
         runtime_agent_ids = {a.gt_agent.id for a in runtime_agents}
         on_board_agents = await gtAgentManager.get_team_all_agents(team.id, EmployStatus.ON_BOARD)
         on_board_ids = {a.id for a in on_board_agents}
 
-        # 运行时 agent 应等于在职 agent
         assert runtime_agent_ids == on_board_ids
-        # 离职的 alice 不应在运行时
-        assert alice.id not in runtime_agent_ids
+        assert alice_after.id in runtime_agent_ids
+
+    async def test_set_team_enabled_auto_offboards_agents_outside_dept_tree(self):
+        """启用团队时，应自动将未进入部门树的在职成员转为离岗，避免恢复运行时失败。"""
+        team = await gtTeamManager.get_team(TEAM)
+        assert team is not None
+        alice = await gtAgentManager.get_agent(team.id, "alice")
+        assert alice is not None
+
+        orphan = GtAgent(
+            team_id=team.id,
+            name="temp_orphan_member",
+            role_template_id=alice.role_template_id,
+            model="",
+            driver=DriverType.NATIVE,
+            employ_status=EmployStatus.ON_BOARD,
+        )
+        await orphan.aio_save()
+
+        await teamService.set_team_enabled(team.id, False)
+        await teamService.set_team_enabled(team.id, True)
+
+        orphan_after = await gtAgentManager.get_agent(team.id, "temp_orphan_member", EmployStatus.OFF_BOARD)
+        assert orphan_after is not None
+        assert orphan_after.employ_status == EmployStatus.OFF_BOARD
+        runtime_agent_ids = {a.gt_agent.id for a in agentService.get_team_agents(team.id)}
+        assert orphan_after.id not in runtime_agent_ids
 
 
 class TestAgentStatus(_agentServiceCase):

@@ -20,12 +20,12 @@ async def overwrite_dept_tree(team_id: int, root: GtDept) -> None:
     assertUtil.assertNotNull(team, error_message=f"Team ID '{team_id}' not found", error_code="team_not_found")
     assertUtil.assertFalse(team.enabled, error_message="团队必须处于停用状态才能编辑组织树", error_code="team_not_stopped")
 
-    # 单次递归：校验整棵树 + 收集 Agent ID。
+    # 单次递归：校验整棵树。
     try:
-        all_agent_ids, _ = root.validate_and_collect_tree_ids()
+        root.validate_tree()
     except ValueError as exc:
         raise TogoException(str(exc), error_code="DEPT_MEMBERS_TOO_FEW") from exc
-    input_dept_ids = root.collect_dept_ids()
+    all_agent_ids, input_dept_ids = root.collect_dept_and_agent_ids()
 
     # 先删除不在传入 id 集合中的旧部门，再执行覆盖保存。
     existing_depts = await gtDeptManager.get_all_depts(team_id)

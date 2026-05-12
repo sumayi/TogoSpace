@@ -4,8 +4,8 @@ import datetime
 import logging
 from zoneinfo import ZoneInfo
 
-from constants import AgentStatus, DriverType, RoleTemplateType, RoomState, SpecialAgent
-from dal.db import gtAgentManager, gtRoomManager, gtRoleTemplateManager
+from constants import AgentStatus, DriverType, EmployStatus, RoleTemplateType, RoomState, SpecialAgent
+from dal.db import gtAgentManager, gtRoomManager, gtRoleTemplateManager, gtTeamManager
 from model.dbModel.gtAgent import GtAgent
 from model.dbModel.gtDept import GtDept
 from model.dbModel.gtRoleTemplate import GtRoleTemplate
@@ -273,6 +273,25 @@ async def wake_up_agent(agent_name: str, _context: ToolCallContext = None) -> di
 
     return {"success": True, "message": f"已成功唤醒 {agent_name}，该成员将重新进入调度循环。"}
 
+
+async def reload_team(_context: ToolCallContext = None) -> dict:
+    """重载当前团队的运行时。
+
+    注意：该操作会重启当前团队的运行时，可能中断团队内正在执行的任务。
+    """
+    ok, team_id = _require_team_context(_context)
+    if not ok:
+        return {"success": False, "message": "当前没有可用的团队上下文。"}
+
+    from service import teamService
+
+    team = await gtTeamManager.get_team_by_id(team_id)
+    if team is None:
+        return {"success": False, "message": f"未找到团队: team_id={team_id}"}
+
+    await teamService.hot_reload_team(team.name)
+    return {"success": True, "message": f"已触发团队 {team.name} 的运行时重载。", "team_name": team.name}
+
 async def list_role_templates(keywords: list[str] | None = None, _context: ToolCallContext = None) -> dict:
     """查询全部角色模板列表。
 
@@ -419,7 +438,7 @@ async def save_agent(
     if role_template is None:
         return {"success": False, "message": f"未找到角色模板: {normalized_role_template_name}"}
 
-    existing = await gtAgentManager.get_agent(team_id, normalized_name)
+    existing = await gtAgentManager.get_agent(team_id, normalized_name, status=None)
     if existing is not None and existing.team_id == -1:
         return {"success": False, "message": f"保留成员 {normalized_name} 不允许通过工具创建或修改。"}
     if existing is not None and overwrite_existing is False:
@@ -428,7 +447,11 @@ async def save_agent(
             "message": f"成员 {normalized_name} 已存在；如需覆盖请将 overwrite_existing 设为 true。",
         }
 
-    agent = existing or GtAgent(team_id=team_id, name=normalized_name)
+    agent = existing or GtAgent(
+        team_id=team_id,
+        name=normalized_name,
+        employ_status=EmployStatus.OFF_BOARD,
+    )
     agent.role_template_id = role_template.id
     agent.model = model or ""
     agent.driver = driver_type
@@ -436,13 +459,14 @@ async def save_agent(
     agent.i18n = i18n or {}
 
     await gtAgentManager.batch_save_agents(team_id, [agent])
-    saved = await gtAgentManager.get_agent(team_id, normalized_name)
+    saved = await gtAgentManager.get_agent(team_id, normalized_name, status=None)
     if saved is None:
         return {"success": False, "message": f"成员保存失败: {normalized_name}"}
 
     action = "更新" if existing is not None else "创建"
     payload = saved.to_json()
     payload["driver"] = saved.driver.value
+    payload["employ_status"] = saved.employ_status.name
     payload["role_template_name"] = role_template.name
     return {
         "success": True,

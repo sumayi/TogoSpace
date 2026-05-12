@@ -43,6 +43,9 @@ async def test_restore_team_restores_agent_state_before_rooms(monkeypatch):
         assert workspace_root == "/tmp/ws"
         call_order.append("load_team")
 
+    async def _sync_team_agent_status_with_dept_tree(_team_id: int):
+        call_order.append("sync_agent_status")
+
     async def _refresh_rooms(_team_id: int):
         call_order.append("refresh_rooms")
 
@@ -58,6 +61,7 @@ async def test_restore_team_restores_agent_state_before_rooms(monkeypatch):
         call_order.append("start_scheduling")
 
     monkeypatch.setattr(teamService.gtTeamManager, "get_team_by_id", _get_team_by_id)
+    monkeypatch.setattr(teamService, "_sync_team_agent_status_with_dept_tree", _sync_team_agent_status_with_dept_tree)
     monkeypatch.setattr(agentService, "load_team_agents", _load_team_agents)
     monkeypatch.setattr(roomService, "load_team_rooms", _refresh_rooms)
     monkeypatch.setattr(agentService, "restore_team_agents_runtime_state", _restore_team_agents_runtime_state)
@@ -71,6 +75,7 @@ async def test_restore_team_restores_agent_state_before_rooms(monkeypatch):
     )
 
     assert call_order == [
+        "sync_agent_status",
         "load_team",
         "refresh_rooms",
         "restore_agent_state",
