@@ -308,20 +308,21 @@ async def save_role_template(
     name: str,
     type: str,
     soul: str,
-    allowed_tools: list,
+    allowed_tools: list[str],
     model: str | None = None,
     i18n: dict | None = None,
     _context: ToolCallContext = None,
 ) -> dict:
-    """创建或更新角色模板。
+    """创建或更新角色模板。若指定的 name 不存在则新建（必须设为 USER 类型），若已存在则更新该模板（注意：SYSTEM 类型的内置模板不可通过此工具修改）。
 
     Args:
-        name: 角色模板名称（按名称 upsert）
-        type: 角色模板类型，仅允许 SYSTEM 或 USER
-        soul: 角色模板提示词
-        allowed_tools: 可见工具列表
-        model: 可选模型覆盖
-        i18n: 可选多语言数据，支持 display_name
+        name: 角色模板名称。作为系统唯一标识符，建议使用英文小写字母和下划线。对应的多语言显示名称请通过 i18n 参数设置。
+        type: 角色模板类型。SYSTEM 代表系统内置模版（随系统发布，只读）；USER 代表用户自定义模版（可增删改）。通过此工具操作时，请统一指定为 USER。
+        soul: 角色模板的核心提示词。应包含角色的身份定位、职责边界和行为准则，是 Agent 运行的“灵魂”。该内容会作为核心指令注入到对应角色的 System Prompt 中。
+        allowed_tools: 可见工具列表。支持具体工具名（如 "read_file"）或类别语法（如 "Category:Read"）。系统会自动合并类别和具体工具名。基础协作工具（Basic 类别）默认总是开启，无需显式包含。通常情况下此列表留空即可，系统会自动授予 Admin 以外的所有常规类别权限。
+                       可用类别：Read, Write, Execute, Admin。注意：Admin 类别属于团队管理功能，严禁分配给除团队根主管以外的普通成员。
+        model: 可选模型覆盖。一般建议保持留空（None），此时将使用 Agent 默认配置的模型。仅在确需强制该角色使用特定模型时设置。
+        i18n: 可选多语言数据。示例：{"display_name": {"zh-CN": "高级写手", "en": "Senior Writer"}}
     """
     from service import roleTemplateService
     from service.agentService.toolRegistry import validate_tool_allow_specs
@@ -365,11 +366,12 @@ async def save_role_template(
 
 
 async def delete_role_template(role_name: str, _context: ToolCallContext = None) -> dict:
-    """按名称删除角色模板。
+    """删除指定的角色模板。注意：仅能删除由用户创建（USER 类型）且当前未被任何成员使用的模板。
 
     Args:
-        role_name: 角色模板名称
+        role_name: 要删除的角色模板名称
     """
+
     normalized_name = role_name.strip()
     template = await gtRoleTemplateManager.get_role_template_by_name(normalized_name)
     if template is None:
