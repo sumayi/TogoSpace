@@ -96,6 +96,7 @@ class ClaudeSdkAgentDriver(AgentDriver):
                 t,
                 funcToolService.run_tool_call,
                 marks_turn_finish=fn_name == "finish_chat_turn",
+                self_interrupt=fn_name == "reload_team",
             )
         configured_names = self.config.options.get("local_tool_names")
         if configured_names:

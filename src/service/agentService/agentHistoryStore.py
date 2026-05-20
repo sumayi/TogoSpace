@@ -148,6 +148,19 @@ class AgentHistoryStore:
         )
         return await self.append_history_message(item)
 
+    async def mark_self_interrupt_tag(self, history_id: int) -> None:
+        """为 TOOL/INIT 条目追加 SELF_INTERRUPT tag 并持久化。
+
+        在自中断工具 handler 调用前写入，作为"执行已开始"的持久化标记。
+        重启后 _advance_step 检测到该 tag 即可自动完成，无需重新执行。
+        """
+        target: GtAgentHistory | None = next((i for i in self._items if i.id == history_id), None)
+        if target is None:
+            return
+        if AgentHistoryTag.SELF_INTERRUPT not in target.tags:
+            target.tags = list(target.tags) + [AgentHistoryTag.SELF_INTERRUPT]
+        await gtAgentHistoryManager.update_agent_history_by_id(history_id, tags=target.tags)
+
     async def finalize_history_item(
         self,
         history_id: int,

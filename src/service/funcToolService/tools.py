@@ -290,7 +290,11 @@ async def reload_team(_context: ToolCallContext = None) -> dict:
         return {"success": False, "message": f"未找到团队: team_id={team_id}"}
 
     await teamService.hot_reload_team(team.name)
-    return {"success": True, "message": f"已触发团队 {team.name} 的运行时重载。", "team_name": team.name}
+
+    # 正常情况下，hot_reload_team 会取消当前 agent 的任务，代码走不到这里。
+    # 若走到这里说明 agent 未被中断，重载未能如预期完成自中断，返回 failure。
+    # 真正的成功结果由重启后的自中断恢复逻辑（self_interrupt）写入。
+    return {"success": False, "message": f"团队 {team.name} 重载已触发，等待 agent 重启后确认。"}
 
 async def list_role_templates(keywords: list[str] | None = None, _context: ToolCallContext = None) -> dict:
     """查询全部角色模板列表。

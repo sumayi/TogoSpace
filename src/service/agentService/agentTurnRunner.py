@@ -593,6 +593,29 @@ class AgentTurnRunner:
         registered_tool: RegisteredTool | None = self.tool_registry.get_registered_tool(tool_name)
         assert registered_tool is not None, f"tool not registered: {tool_name}"
 
+        if registered_tool.self_interrupt:
+            if AgentHistoryTag.SELF_INTERRUPT in output_item.tags:
+                # 重启后：output_item 已有 SELF_INTERRUPT tag，说明上次已触发过，直接自动成功。
+                logger.info(
+                    "[self-interrupt] 重启后自动完成自中断工具: agent_id=%d, tool=%s",
+                    self.gt_agent.id, tool_name,
+                )
+                auto_result = {"success": True, "message": f"已完成重启，并恢复原历史任务运行"}
+                final_message = llmApiUtil.OpenAIMessage.tool_result(
+                    output_item.tool_call_id,
+                    json.dumps(auto_result, ensure_ascii=False),
+                )
+                await self._history.finalize_history_item(
+                    history_id=output_item.id,
+                    message=final_message,
+                    status=AgentHistoryStatus.SUCCESS,
+                )
+                return TurnStepResult.CONTINUE
+            else:
+                # 第一次执行：写入 tag 后继续执行 handler。
+                # handler 会触发 agent 中断（CancelledError），item 以 INIT+tag 留在 DB。
+                await self._history.mark_self_interrupt_tag(output_item.id)
+
         context = ToolCallContext(
             agent_id=self.gt_agent.id,
             team_id=room.team_id,

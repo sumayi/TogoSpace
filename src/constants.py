@@ -144,6 +144,7 @@ class AgentHistoryTag(EnhanceEnum):
     ROOM_TURN_BEGIN = auto()
     ROOM_TURN_FINISH = auto()
     COMPACT_SUMMARY = auto()
+    SELF_INTERRUPT = auto()  # 该 TOOL/INIT 条目由自中断工具产生，重启后自动标记为成功
 
 
 class AgentHistoryStatus(EnhanceEnum):

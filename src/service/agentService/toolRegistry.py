@@ -88,6 +88,7 @@ class RegisteredTool:
     handler: ToolHandler
     category: ToolCategory | None = None
     marks_turn_finish: bool = False
+    self_interrupt: bool = False
     enabled: bool = True
 
 
@@ -106,6 +107,7 @@ class AgentToolRegistry:
         handler: ToolHandler,
         *,
         marks_turn_finish: bool = False,
+        self_interrupt: bool = False,
     ) -> None:
         name = tool.function.name
         category = tool.category or CATEGORY_CONFIG.get(name)
@@ -115,6 +117,7 @@ class AgentToolRegistry:
             handler=handler,
             category=category,
             marks_turn_finish=marks_turn_finish,
+            self_interrupt=self_interrupt,
         )
 
     def export_openai_tools(self) -> list[llmApiUtil.OpenAITool]:

@@ -25,6 +25,7 @@ class NativeAgentDriver(AgentDriver):
                 tool,
                 funcToolService.run_tool_call,
                 marks_turn_finish=function_name == "finish_chat_turn",
+                self_interrupt=function_name == "reload_team",
             )
         self.host.tool_registry.apply_tool_allow_specs(["Category:Basic"])
 
