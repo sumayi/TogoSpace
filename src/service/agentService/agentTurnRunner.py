@@ -610,6 +610,11 @@ class AgentTurnRunner:
                     message=final_message,
                     status=AgentHistoryStatus.SUCCESS,
                 )
+                await self._finish_activity(
+                    tool_activity.id,
+                    status=AgentActivityStatus.SUCCEEDED,
+                    metadata_patch=AgentActivityMeta(tool_result=auto_result),
+                )
                 return TurnStepResult.CONTINUE
             else:
                 # 第一次执行：写入 tag 后继续执行 handler。
