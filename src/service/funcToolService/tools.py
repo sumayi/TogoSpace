@@ -401,6 +401,7 @@ async def save_agent(
     allow_tools: list[str] | None = None,
     i18n: dict | None = None,
     overwrite_existing: bool = False,
+    agent_id: int | None = None,
     _context: ToolCallContext = None,
 ) -> dict:
     """在当前团队中创建或更新成员。
@@ -413,7 +414,8 @@ async def save_agent(
         allow_tools: 可见工具列表。支持具体工具名（如 "read_file"）或类别语法（如 "Category:Read"）。系统会自动合并类别和具体工具名。基础协作工具（Basic 类别）默认总是开启，无需显式包含。通常情况下此列表留空即可，系统会自动授予 Admin 以外的所有常规类别权限。
                      可用类别：Read, Write, Execute, Admin。注意：Admin 类别属于团队管理功能，严禁分配给除团队根主管以外的普通成员。
         i18n: 可选多语言数据。示例：{"display_name": {"zh-CN": "Alice", "en": "Alice"}}
-        overwrite_existing: 是否允许覆盖当前团队中已存在的同名成员。默认 false；为 true 时，若同名成员已存在则执行更新。
+        overwrite_existing: 是否允许覆盖当前团队中已存在的同名成员。默认 false；为 true 时，若同名成员已存在则执行更新。当传入 agent_id 时，此参数不生效。
+        agent_id: 可选成员 ID。传入后按 ID 精确定位成员（忽略 overwrite_existing），此时 name 可用于重命名。
     """
     ok, team_id = _require_team_context(_context)
     if not ok:
@@ -443,20 +445,27 @@ async def save_agent(
     if role_template is None:
         return {"success": False, "message": f"未找到角色模板: {normalized_role_template_name}"}
 
-    existing = await gtAgentManager.get_agent(team_id, normalized_name, status=None)
+    if agent_id is not None:
+        existing = await gtAgentManager.get_agent_by_id(agent_id)
+        if existing is None or existing.team_id != team_id:
+            return {"success": False, "message": f"未找到 ID 为 {agent_id} 的成员。"}
+    else:
+        existing = await gtAgentManager.get_agent(team_id, normalized_name, status=None)
+        if existing is not None and overwrite_existing is False:
+            return {
+                "success": False,
+                "message": f"成员 {normalized_name} 已存在；如需覆盖请将 overwrite_existing 设为 true。",
+            }
+
     if existing is not None and existing.team_id == -1:
-        return {"success": False, "message": f"保留成员 {normalized_name} 不允许通过工具创建或修改。"}
-    if existing is not None and overwrite_existing is False:
-        return {
-            "success": False,
-            "message": f"成员 {normalized_name} 已存在；如需覆盖请将 overwrite_existing 设为 true。",
-        }
+        return {"success": False, "message": f"保留成员 {existing.name} 不允许通过工具创建或修改。"}
 
     agent = existing or GtAgent(
         team_id=team_id,
         name=normalized_name,
         employ_status=EmployStatus.OFF_BOARD,
     )
+    agent.name = normalized_name
     agent.role_template_id = role_template.id
     agent.model = model or ""
     agent.driver = driver_type
@@ -464,7 +473,7 @@ async def save_agent(
     agent.i18n = i18n or {}
 
     await gtAgentManager.batch_save_agents(team_id, [agent])
-    saved = await gtAgentManager.get_agent(team_id, normalized_name, status=None)
+    saved = await gtAgentManager.get_agent_by_id(agent.id) if agent.id else await gtAgentManager.get_agent(team_id, normalized_name, status=None)
     if saved is None:
         return {"success": False, "message": f"成员保存失败: {normalized_name}"}
 
@@ -498,6 +507,7 @@ async def save_dept(
     parent_name: str | None = None,
     i18n: dict | None = None,
     overwrite_existing: bool = False,
+    dept_id: int | None = None,
     _context: ToolCallContext = None,
 ) -> dict:
     """在当前团队中创建或更新组织（部门）。全量覆盖模式：每次调用会完整替换成员列表。
@@ -509,7 +519,8 @@ async def save_dept(
         member_names: 成员名称列表。全量覆盖，每次调用将完整替换现有成员列表。
         parent_name: 父组织名称。新建组织时必须指定；不能设置为自身或自身的子组织。更新已有根组织时可省略或传 null 以保持其根节点状态。
         i18n: 可选多语言数据。示例：{"dept_name": {"zh-CN": "研发部", "en": "R&D"}, "responsibility": {"zh-CN": "..."}}
-        overwrite_existing: 是否允许覆盖已存在的同名组织。默认 false；为 true 时执行更新。
+        overwrite_existing: 是否允许覆盖已存在的同名组织。默认 false；为 true 时执行更新。当传入 dept_id 时，此参数不生效。
+        dept_id: 可选组织 ID。传入后按 ID 精确定位组织（忽略 overwrite_existing），此时 name 可用于重命名。
     """
     ok, team_id = _require_team_context(_context)
     if not ok:
@@ -547,13 +558,18 @@ async def save_dept(
     if manager_agent.id not in resolved_ids:
         resolved_ids.insert(0, manager_agent.id)
 
-    # 检查是否已存在同名组织
-    existing = await gtDeptManager.get_dept_by_name(team_id, normalized_name)
-    if existing is not None and not overwrite_existing:
-        return {
-            "success": False,
-            "message": f"组织 {normalized_name} 已存在；如需覆盖请将 overwrite_existing 设为 true。",
-        }
+    # 按 ID 或名称定位已有组织
+    if dept_id is not None:
+        existing = await gtDeptManager.get_dept_by_id(dept_id)
+        if existing is None or existing.team_id != team_id:
+            return {"success": False, "message": f"未找到 ID 为 {dept_id} 的组织。"}
+    else:
+        existing = await gtDeptManager.get_dept_by_name(team_id, normalized_name)
+        if existing is not None and not overwrite_existing:
+            return {
+                "success": False,
+                "message": f"组织 {normalized_name} 已存在；如需覆盖请将 overwrite_existing 设为 true。",
+            }
 
     # 解析 parent_name → parent_id，并校验循环引用
     parent_id: int | None = None

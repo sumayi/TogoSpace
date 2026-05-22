@@ -230,6 +230,9 @@ async def overwrite_dept_rooms(team_id: int, rooms: Sequence[DeptRoomSpec]) -> N
     # 去重并固定“目标态”：同一 biz_id 仅保留最后一条 spec。
     by_biz_id: dict[str, DeptRoomSpec] = {room.biz_id: room for room in rooms}
 
+    # 成员不足 2 人的部门不创建/更新房间（保留在 by_biz_id 之外，后续步骤 3 会清理其旧房间）
+    by_biz_id = {biz_id: spec for biz_id, spec in by_biz_id.items() if len(spec.agent_ids) >= 2}
+
     for spec in by_biz_id.values():
         # 1) 按 biz_id 查找目标房间，不存在则初始化一个待创建对象。
         existing = await gtRoomManager.get_room_by_biz_id(team_id, spec.biz_id)

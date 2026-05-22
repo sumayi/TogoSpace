@@ -3,6 +3,10 @@ from __future__ import annotations
 from model.dbModel.gtDept import GtDept
 
 
+async def get_dept_by_id(dept_id: int) -> GtDept | None:
+    return await GtDept.aio_get_or_none(GtDept.id == dept_id)
+
+
 async def get_dept_by_name(team_id: int, name: str) -> GtDept | None:
     return await GtDept.aio_get_or_none(
         GtDept.team_id == team_id,

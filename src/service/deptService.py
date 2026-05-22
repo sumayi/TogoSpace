@@ -156,7 +156,7 @@ async def upsert_dept(
             i18n=affected.i18n or None,
         )
 
-    return await gtDeptManager.save_dept(
+    saved: GtDept = await gtDeptManager.save_dept(
         team_id=team_id,
         name=name,
         responsibility=responsibility,
@@ -166,6 +166,13 @@ async def upsert_dept(
         dept_id=dept_id,
         i18n=i18n,
     )
+
+    # 同步部门房间（与 overwrite_dept_tree 保持一致）
+    tree: GtDept = await get_dept_tree(team_id)
+    assert tree is not None, "upsert_dept 之后部门树不应为空"
+    await roomService.overwrite_dept_rooms(team_id, tree.collect_room_specs())
+
+    return saved
 
 
 async def get_dept_tree(team_id: int) -> GtDept | None:
