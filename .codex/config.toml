@@ -1,0 +1,3 @@
+[mcp_servers.chrome]
+args = ["chrome-devtools-mcp"]
+command = "npx"

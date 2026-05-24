@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""按显式 action 执行前后端状态查看、提交、同步、推送。
+"""按显式 action 执行仓库状态查看、提交、同步、推送。
 
 背景:
-    本项目包含前端 submodule (frontend/)，提交代码时需要分别处理：
-    - 前端必须在 master 分支提交（避免 detached HEAD 状态下提交丢失）
-    - 后端需要同步更新 frontend submodule 指针
-    - sync / push 前需要确认和远端的 ahead / behind 状态，避免误操作
+    现在前后端代码都位于同一个仓库中：
+    - `frontend/` 为前端目录
+    - 其余源码与脚本位于主仓库根目录
+    - sync / push 仍然以当前 git 分支为单位执行
 
 用法:
     python scripts/commit_and_push_frondbackend.py --action status
     python scripts/commit_and_push_frondbackend.py --action commit -m "fix: description"
     python scripts/commit_and_push_frondbackend.py --action push
-    python scripts/commit_and_push_frondbackend.py --action sync,commit,push --target all -m "fix: description"
+    python scripts/commit_and_push_frondbackend.py --action sync,commit,push --target frontend -m "fix: description"
 
 说明:
     - --action 必填，使用逗号分隔动作
@@ -19,6 +19,7 @@
     - 包含 commit 时必须传 -m/--message
     - sync 仅做 fast-forward，不自动 merge
     - status 为独立动作，不与其他 action 混用
+    - target 仅影响 status / commit 的文件范围；sync / push 始终作用于当前分支
 """
 
 from __future__ import annotations
@@ -30,9 +31,7 @@ from pathlib import Path
 
 
 REMOTE_NAME = "origin"
-FRONTEND_TARGET_BRANCH = "master"
-MAIN_REPO_DISPLAY_NAME = "主仓库"
-FRONTEND_REPO_DISPLAY_NAME = "子模块【前端仓库】"
+REPO_DISPLAY_NAME = "仓库"
 VALID_ACTIONS = ("status", "sync", "commit", "push")
 VALID_ACTION_SEQUENCES = {
     ("status",),
@@ -52,57 +51,32 @@ def run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
 
 
-def get_status_lines(repo: Path) -> list[str]:
+def get_pathspecs(target: str) -> list[str]:
+    if target == "frontend":
+        return ["frontend"]
+    if target == "backend":
+        return [".", ":(exclude)frontend"]
+    return ["."]
+
+
+def get_status_lines(repo: Path, target: str = "all") -> list[str]:
     """返回 git status --porcelain 的非空行。"""
-    result = run(["git", "status", "--porcelain"], cwd=repo)
+    result = run(["git", "status", "--porcelain", "--", *get_pathspecs(target)], cwd=repo)
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
-def has_changes(repo: Path) -> bool:
+def has_changes(repo: Path, target: str = "all") -> bool:
     """检查仓库是否有未提交的改动。"""
-    return bool(get_status_lines(repo))
-
-
-def has_only_path_changes(repo: Path, path: str) -> bool:
-    """检查未提交改动是否仅限于指定路径。"""
-    lines = get_status_lines(repo)
-    if not lines:
-        return False
-    for line in lines:
-        if len(line) < 4:
-            return False
-        changed_path = line[3:]
-        if changed_path != path:
-            return False
-    return True
+    return bool(get_status_lines(repo, target))
 
 
 def get_current_branch(repo: Path) -> str:
-    """获取当前分支名。"""
     result = run(["git", "branch", "--show-current"], cwd=repo)
     return result.stdout.strip()
 
 
-def safe_switch_master(frontend: Path) -> None:
-    """安全切换到 master 分支，失败时提示用户手动处理。"""
-    try:
-        run(["git", "switch", FRONTEND_TARGET_BRANCH], cwd=frontend)
-    except subprocess.CalledProcessError as e:
-        print(f"{FRONTEND_REPO_DISPLAY_NAME}切换 {FRONTEND_TARGET_BRANCH} 失败: {e.stderr.strip()}")
-        print("请手动处理后再运行此脚本，例如:")
-        print("  cd frontend && git stash  # 暂存改动")
-        print(f"  cd frontend && git switch {FRONTEND_TARGET_BRANCH}")
-        print("  cd frontend && git stash pop  # 恢复改动")
-        sys.exit(1)
-
-
-def get_tracking_target(repo: Path, fallback_branch: str | None = None) -> tuple[str, str]:
-    """返回当前仓库用于同步/推送的 (remote, branch)。
-
-    优先使用当前分支 upstream；若未设置 upstream，则回退到:
-    - fallback_branch（若显式传入，例如前端固定 master）
-    - 否则回退到当前分支同名远端分支
-    """
+def get_tracking_target(repo: Path) -> tuple[str, str]:
+    """返回当前仓库用于同步/推送的 (remote, branch)。"""
     current_branch = get_current_branch(repo)
     try:
         result = run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], cwd=repo)
@@ -110,11 +84,10 @@ def get_tracking_target(repo: Path, fallback_branch: str | None = None) -> tuple
         remote, branch = upstream.split("/", 1)
         return remote, branch
     except subprocess.CalledProcessError:
-        return REMOTE_NAME, (fallback_branch or current_branch)
+        return REMOTE_NAME, current_branch
 
 
 def fetch_remote_branch(repo: Path, name: str, remote: str, branch: str) -> None:
-    """获取远端分支状态。"""
     print(f"{name}: 获取远端状态...")
     try:
         run(["git", "fetch", remote, branch], cwd=repo)
@@ -125,7 +98,6 @@ def fetch_remote_branch(repo: Path, name: str, remote: str, branch: str) -> None
 
 
 def try_fetch_remote_branch(repo: Path, remote: str, branch: str) -> tuple[bool, str]:
-    """尽量获取远端状态；失败时返回错误信息，但不退出。"""
     try:
         run(["git", "fetch", remote, branch], cwd=repo)
         return True, ""
@@ -134,7 +106,6 @@ def try_fetch_remote_branch(repo: Path, remote: str, branch: str) -> tuple[bool,
 
 
 def get_ahead_behind(repo: Path, remote: str, branch: str) -> tuple[int, int]:
-    """返回 (behind, ahead)。"""
     result = run(
         ["git", "rev-list", "--left-right", "--count", f"{remote}/{branch}...HEAD"],
         cwd=repo,
@@ -148,23 +119,7 @@ def get_latest_commit(repo: Path) -> str:
     return result.stdout.strip()
 
 
-def get_rev_sha(repo: Path, rev: str) -> str:
-    """返回指定 rev 的完整 SHA。"""
-    result = run(["git", "rev-parse", rev], cwd=repo)
-    return result.stdout.strip()
-
-
-def get_submodule_recorded_sha(repo: Path, rev: str, submodule_path: str) -> str:
-    """读取指定提交中 submodule 记录的 commit SHA。"""
-    result = run(["git", "ls-tree", rev, submodule_path], cwd=repo)
-    parts = result.stdout.strip().split()
-    if len(parts) < 3:
-        raise RuntimeError(f"无法读取 {rev}:{submodule_path} 的 submodule 指针")
-    return parts[2]
-
-
 def pull_ff_only(repo: Path, name: str, remote: str, branch: str) -> None:
-    """仅在可 fast-forward 时拉取远端。"""
     print(f"{name}: fast-forward 拉取远端代码...")
     try:
         run(["git", "pull", "--ff-only", remote, branch], cwd=repo)
@@ -179,7 +134,6 @@ def pull_ff_only(repo: Path, name: str, remote: str, branch: str) -> None:
 
 
 def push_remote_branch(repo: Path, name: str, remote: str, branch: str) -> None:
-    """推送到指定远端分支。"""
     print(f"{name}: 推送到远端...")
     try:
         run(["git", "push", remote, f"HEAD:{branch}"], cwd=repo)
@@ -189,11 +143,12 @@ def push_remote_branch(repo: Path, name: str, remote: str, branch: str) -> None:
         sys.exit(1)
 
 
-def commit_all(repo: Path, name: str, commit_msg: str) -> None:
-    """提交当前仓库的全部改动。"""
+def commit_target(repo: Path, name: str, commit_msg: str, target: str) -> None:
+    """提交指定目标范围的改动。"""
     print(f"{name}: 提交本地改动...")
+    pathspecs = get_pathspecs(target)
     try:
-        run(["git", "add", "-A"], cwd=repo)
+        run(["git", "add", "-A", "--", *pathspecs], cwd=repo)
         run(["git", "commit", "-m", commit_msg], cwd=repo)
     except subprocess.CalledProcessError as e:
         print(f"{name}: 提交失败")
@@ -202,7 +157,6 @@ def commit_all(repo: Path, name: str, commit_msg: str) -> None:
 
 
 def parse_actions(raw: str) -> list[str]:
-    """解析并校验 action 列表。"""
     seen: set[str] = set()
     actions: list[str] = []
 
@@ -241,14 +195,15 @@ def ensure_message_requirements(actions: list[str], message: str | None) -> None
         sys.exit(1)
 
 
-def print_repo_status(repo: Path, name: str, *, fallback_branch: str | None = None) -> None:
+def print_repo_status(repo: Path, name: str, target: str) -> None:
     branch = get_current_branch(repo)
-    dirty = has_changes(repo)
+    dirty = has_changes(repo, target)
     latest_commit = get_latest_commit(repo)
-    remote, remote_branch = get_tracking_target(repo, fallback_branch=fallback_branch)
+    remote, remote_branch = get_tracking_target(repo)
     fetched, fetch_error = try_fetch_remote_branch(repo, remote, remote_branch)
 
     print(f"[{name}]")
+    print(f"  target: {target}")
     print(f"  branch: {branch}")
     print(f"  worktree: {'dirty' if dirty else 'clean'}")
     print(f"  latest: {latest_commit}")
@@ -262,90 +217,13 @@ def print_repo_status(repo: Path, name: str, *, fallback_branch: str | None = No
         print(f"  remote: {remote}/{remote_branch} (unavailable)")
         print(f"  fetch_error: {fetch_error}")
 
+    lines = get_status_lines(repo, target)
+    if lines:
+        print("  changes:")
+        for line in lines:
+            print(f"    {line}")
+
     print()
-
-
-def load_remote_state(repo: Path, name: str, remote: str, branch: str) -> tuple[int, int]:
-    fetch_remote_branch(repo, name, remote, branch)
-    return get_ahead_behind(repo, remote, branch)
-
-
-def update_submodule_to_recorded_commit(repo: Path, submodule_path: str) -> None:
-    """将 submodule 更新到主仓库当前提交记录的指针。"""
-    print(f"{MAIN_REPO_DISPLAY_NAME}: 更新{submodule_path}到记录指针...")
-    try:
-        run(["git", "submodule", "update", "--init", "--recursive", submodule_path], cwd=repo)
-    except subprocess.CalledProcessError as e:
-        print(f"{MAIN_REPO_DISPLAY_NAME}: 更新{submodule_path}失败")
-        print(e.stderr.strip())
-        sys.exit(1)
-
-
-def sync_all_repos(repo_root: Path, frontend: Path) -> None:
-    """按主仓库指针统一同步主仓库与前端子模块。"""
-    backend_remote, backend_branch = get_tracking_target(repo_root)
-    frontend_remote, frontend_branch = get_tracking_target(frontend, fallback_branch=FRONTEND_TARGET_BRANCH)
-
-    fetch_remote_branch(repo_root, MAIN_REPO_DISPLAY_NAME, backend_remote, backend_branch)
-    fetch_remote_branch(frontend, FRONTEND_REPO_DISPLAY_NAME, frontend_remote, frontend_branch)
-
-    backend_dirty = has_changes(repo_root)
-    backend_behind, backend_ahead = get_ahead_behind(repo_root, backend_remote, backend_branch)
-    frontend_dirty = has_changes(frontend)
-    frontend_remote_sha = get_rev_sha(frontend, f"{frontend_remote}/{frontend_branch}")
-
-    if frontend_dirty:
-        print(f"{FRONTEND_REPO_DISPLAY_NAME}: 存在未提交改动，无法安全按主仓库指针同步")
-        print(f"  cd {frontend}")
-        print("  git status")
-        sys.exit(1)
-
-    if backend_behind > 0 and backend_ahead > 0:
-        print(f"{MAIN_REPO_DISPLAY_NAME}: 本地与远端已分叉 (behind={backend_behind}, ahead={backend_ahead})，请手动处理")
-        print(f"  cd {repo_root}")
-        print("  git status")
-        print(f"  git log --oneline --left-right {backend_remote}/{backend_branch}...HEAD")
-        sys.exit(1)
-
-    if backend_dirty and backend_behind > 0:
-        if not has_only_path_changes(repo_root, "frontend"):
-            print(f"{MAIN_REPO_DISPLAY_NAME}: 存在未提交改动，且本地落后远端 {backend_behind} 个提交，无法安全自动同步")
-            print(f"  cd {repo_root}")
-            print("  git status")
-            sys.exit(1)
-
-        target_frontend_sha = get_submodule_recorded_sha(repo_root, f"{backend_remote}/{backend_branch}", "frontend")
-        current_frontend_sha = get_rev_sha(frontend, "HEAD")
-        if current_frontend_sha != target_frontend_sha:
-            print(f"{MAIN_REPO_DISPLAY_NAME}: 仅 frontend 子模块指针有本地变化，但与远端目标指针不一致，无法安全自动同步")
-            print(f"  当前 frontend HEAD: {current_frontend_sha}")
-            print(f"  远端目标指针:      {target_frontend_sha}")
-            sys.exit(1)
-
-    if backend_behind > 0:
-        pull_ff_only(repo_root, MAIN_REPO_DISPLAY_NAME, backend_remote, backend_branch)
-    else:
-        print(f"{MAIN_REPO_DISPLAY_NAME}: 无需同步")
-
-    recorded_frontend_sha = get_submodule_recorded_sha(repo_root, "HEAD", "frontend")
-    update_submodule_to_recorded_commit(repo_root, "frontend")
-
-    current_frontend_sha = get_rev_sha(frontend, "HEAD")
-    if current_frontend_sha != recorded_frontend_sha:
-        print(f"{FRONTEND_REPO_DISPLAY_NAME}: 更新后 HEAD 与主仓库记录指针不一致，请手动检查")
-        print(f"  记录指针: {recorded_frontend_sha}")
-        print(f"  当前 HEAD: {current_frontend_sha}")
-        sys.exit(1)
-
-    if current_frontend_sha == frontend_remote_sha:
-        current_branch = get_current_branch(frontend)
-        if current_branch != FRONTEND_TARGET_BRANCH:
-            print(f"{FRONTEND_REPO_DISPLAY_NAME}: 指针等于 {frontend_remote}/{frontend_branch}，切回 {FRONTEND_TARGET_BRANCH} 分支")
-            safe_switch_master(frontend)
-        else:
-            print(f"{FRONTEND_REPO_DISPLAY_NAME}: 已在 {FRONTEND_TARGET_BRANCH} 分支，无需切换")
-    else:
-        print(f"{FRONTEND_REPO_DISPLAY_NAME}: 指针未对齐 {frontend_remote}/{frontend_branch}，保持当前 detached HEAD")
 
 
 def ensure_can_sync_or_push(
@@ -372,49 +250,38 @@ def ensure_can_sync_or_push(
         sys.exit(1)
 
 
-def process_repo(
-    repo: Path,
-    name: str,
-    actions: list[str],
-    commit_msg: str | None,
-    *,
-    switch_master: bool = False,
-) -> None:
-    """按显式 actions 处理单个仓库。"""
-    if switch_master:
-        branch = get_current_branch(repo)
-        if branch != FRONTEND_TARGET_BRANCH:
-            print(f"{name}: 当前不在 {FRONTEND_TARGET_BRANCH} 分支 (当前: {branch})，准备切换")
-            safe_switch_master(repo)
-
-    remote, remote_branch = get_tracking_target(
-        repo,
-        fallback_branch=FRONTEND_TARGET_BRANCH if switch_master else None,
-    )
-    dirty = has_changes(repo)
+def process_repo(repo: Path, name: str, actions: list[str], commit_msg: str | None, target: str) -> None:
+    remote, remote_branch = get_tracking_target(repo)
+    dirty = has_changes(repo, target)
     behind = 0
     ahead = 0
 
+    if target != "all" and any(action in actions for action in ("sync", "push")):
+        print(f"{name}: sync/push 按分支执行，不区分 {target} 目录范围")
+
     if "sync" in actions or "push" in actions:
-        behind, ahead = load_remote_state(repo, name, remote, remote_branch)
+        fetch_remote_branch(repo, name, remote, remote_branch)
+        behind, ahead = get_ahead_behind(repo, remote, remote_branch)
         ensure_can_sync_or_push(repo, name, dirty, behind, ahead, remote, remote_branch)
 
     if "sync" in actions:
         if behind > 0:
             pull_ff_only(repo, name, remote, remote_branch)
-            behind, ahead = load_remote_state(repo, name, remote, remote_branch)
+            fetch_remote_branch(repo, name, remote, remote_branch)
+            behind, ahead = get_ahead_behind(repo, remote, remote_branch)
         else:
             print(f"{name}: 无需同步")
 
     if "commit" in actions:
-        dirty = has_changes(repo)
+        dirty = has_changes(repo, target)
         if dirty:
-            commit_all(repo, name, commit_msg or "")
+            commit_target(repo, name, commit_msg or "", target)
         else:
-            print(f"{name}: 无未提交改动，跳过 commit")
+            print(f"{name}: 目标范围内无未提交改动，跳过 commit")
 
     if "push" in actions:
-        behind, ahead = load_remote_state(repo, name, remote, remote_branch)
+        fetch_remote_branch(repo, name, remote, remote_branch)
+        behind, ahead = get_ahead_behind(repo, remote, remote_branch)
         ensure_can_sync_or_push(repo, name, has_changes(repo), behind, ahead, remote, remote_branch)
         if ahead > 0:
             push_remote_branch(repo, name, remote, remote_branch)
@@ -423,7 +290,7 @@ def process_repo(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="TogoAgent 前后端提交/同步/推送脚本")
+    parser = argparse.ArgumentParser(description="TogoSpace 仓库提交/同步/推送脚本")
     parser.add_argument(
         "--action",
         type=str,
@@ -435,7 +302,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="all",
         choices=VALID_TARGETS,
-        help="目标仓库：frontend / backend / all，默认 all",
+        help="目标范围：frontend / backend / all，默认 all",
     )
     parser.add_argument(
         "-m",
@@ -453,32 +320,16 @@ def main() -> None:
     ensure_message_requirements(actions, args.message)
 
     repo_root = Path(__file__).resolve().parent.parent
-    frontend = repo_root / "frontend"
 
     print(f"ℹ️  action: {','.join(actions)}")
     print(f"ℹ️  target: {args.target}")
 
     if actions == ["status"]:
-        if args.target in ("frontend", "all"):
-            print_repo_status(frontend, FRONTEND_REPO_DISPLAY_NAME, fallback_branch=FRONTEND_TARGET_BRANCH)
-        if args.target in ("backend", "all"):
-            print_repo_status(repo_root, MAIN_REPO_DISPLAY_NAME)
+        print_repo_status(repo_root, REPO_DISPLAY_NAME, args.target)
         print("完成")
         return
 
-    remaining_actions = list(actions)
-
-    if args.target == "all" and "sync" in actions:
-        sync_all_repos(repo_root, frontend)
-        remaining_actions = [action for action in actions if action != "sync"]
-
-    if remaining_actions:
-        if args.target in ("frontend", "all"):
-            process_repo(frontend, FRONTEND_REPO_DISPLAY_NAME, remaining_actions, args.message, switch_master=True)
-
-        if args.target in ("backend", "all"):
-            process_repo(repo_root, MAIN_REPO_DISPLAY_NAME, remaining_actions, args.message, switch_master=False)
-
+    process_repo(repo_root, REPO_DISPLAY_NAME, actions, args.message, args.target)
     print("完成")
 
 

@@ -49,7 +49,7 @@ def _build_frontend():
     print("✅ 前端构建完成")
 
 
-def _assert_frontend_submodule_clean():
+def _assert_frontend_clean():
     frontend_dir = os.path.join(REPO_ROOT, "frontend")
     result = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=no"],
@@ -60,7 +60,7 @@ def _assert_frontend_submodule_clean():
     )
     dirty_lines = [line for line in result.stdout.splitlines() if line.strip()]
     if dirty_lines:
-        print("❌ 前端子模块存在已跟踪文件的未提交改动，请先提交或还原后再打包：", file=sys.stderr)
+        print("❌ frontend/ 目录存在已跟踪文件的未提交改动，请先提交或还原后再打包：", file=sys.stderr)
         for line in dirty_lines:
             print(f"   {line}", file=sys.stderr)
         sys.exit(1)
@@ -169,7 +169,7 @@ def main():
     print(f"ℹ️  版本：{backend_ver}")
 
     _check_quarantine_on_executables()
-    _assert_frontend_submodule_clean()
+    _assert_frontend_clean()
     _build_frontend()
     _sync_frontend()
     _clean()

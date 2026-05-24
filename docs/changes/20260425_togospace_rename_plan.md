@@ -9,7 +9,7 @@
 - 将业务异常类 `TeamAgentException` 重命名为 `TogoException`
 - 将文档中遗留的 `TogoAgentException` 表述一并统一为 `TogoException`
 
-本方案关注仓库内源码、前端子模块、构建发布链路、运行时兼容和文档同步，不包含 GitHub 仓库重命名、域名切换和对外公告执行细节。
+本方案关注仓库内源码、前端代码、构建发布链路、运行时兼容和文档同步，不包含 GitHub 仓库重命名、域名切换和对外公告执行细节。
 
 ## 目标
 
@@ -111,7 +111,7 @@
 
 ### 6. 其他文档与仓库元数据
 
-- `.gitmodules`
+- 前端目录相关构建与发布配置
 - `docs/RELEASE_HANDBOOK.md`
 - `docs/tech/i18n_design.md`
 - `docs/tech/demo_mode_readonly_design.md`
@@ -277,7 +277,7 @@
 - `docs/DOCKER.md`
 - `docs/RELEASE_HANDBOOK.md`
 - 测试配置说明中的 `~/.togo_agent`
-- `.gitmodules` 中的前端子模块地址
+- 前端目录的仓库内路径与相关构建配置
 - 宣传文案中的项目名称和仓库地址
 
 验收标准：

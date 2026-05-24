@@ -21,10 +21,9 @@ DIST_DIR     = os.path.join(FRONTEND_DIR, "dist")
 ASSETS_DIR   = os.path.join(REPO_ROOT, "assets", "frontend")
 
 
-def _check_submodule():
+def _check_frontend_exists():
     if not os.path.exists(os.path.join(FRONTEND_DIR, "package.json")):
-        print("❌ frontend/ 子模块未初始化，请先运行：", file=sys.stderr)
-        print("   git submodule update --init frontend", file=sys.stderr)
+        print("❌ frontend/ 目录缺少 package.json，请确认前端源码已存在", file=sys.stderr)
         sys.exit(1)
 
 
@@ -70,7 +69,7 @@ def main():
     parser.add_argument("--no-sync", action="store_true", help="不同步产物到 assets/frontend/")
     args = parser.parse_args()
 
-    _check_submodule()
+    _check_frontend_exists()
 
     if args.install:
         _npm_install()

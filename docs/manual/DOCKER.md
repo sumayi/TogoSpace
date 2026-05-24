@@ -5,39 +5,33 @@
 ### 使用 Docker Compose（推荐）
 
 ```bash
-# 1. 初始化前端子模块
-git submodule update --init --recursive
-
-# 2. 启动服务
+# 1. 启动服务
 docker compose up -d
 
-# 3. 查看日志
+# 2. 查看日志
 docker compose logs -f
 
-# 4. 停止服务
+# 3. 停止服务
 docker compose down
 ```
 
 ### 使用 Docker 命令
 
 ```bash
-# 1. 初始化前端子模块
-git submodule update --init --recursive
-
-# 2. 构建镜像
+# 1. 构建镜像
 docker build -t togospace:0.1.20 .
 
-# 3. 启动容器
+# 2. 启动容器
 docker run -d \
   --name togospace \
   -p 8080:8080 \
   -v togospace-data:/data \
   togospace:0.1.20
 
-# 4. 查看日志
+# 3. 查看日志
 docker logs -f togospace
 
-# 5. 停止容器
+# 4. 停止容器
 docker stop togospace && docker rm togospace
 ```
 
