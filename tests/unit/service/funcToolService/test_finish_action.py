@@ -59,7 +59,7 @@ async def test_finish_has_content_with_confirm() -> None:
     ctx = _make_context(has_content=True)
     result = await finish_action(_context=ctx, confirm_no_need_talk=True)
     assert result["success"] is False
-    assert "已经在房间发言了" in result["message"]
+    assert "已经通过 send_chat_msg 发过消息" in result["message"]
     assert "confirm_no_need_talk" in result["message"]
 
 
