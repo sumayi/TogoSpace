@@ -60,10 +60,10 @@ TogoSpace 的工具执行层基于 [TSP (Tool Service Protocol)](https://github.
 ### 方法 2：源码运行
 ```bash
 # 克隆仓库
-git clone https://github.com/alexazhou/TogoAgent.git
-cd togo-agent
+git clone <your-repo-url>
+cd TogoSpace
 
-# 安装依赖
+# 安装后端依赖
 pip install -r requirements.txt
 
 # 启动后端服务
@@ -98,7 +98,7 @@ docker run \
 
 - `src/`: 后端核心逻辑，包含 Agent 调度、驱动与持久化。
 - `frontend/`: 基于 Vue 3 + TypeScript 的可视化控制台。
-- `tui/`: Coming Soon 基于 Textual 的高性能终端交互界面 (Coming Soon)。
+- `tui/`: 基于 Textual 的高性能终端交互界面。
 
 - `docs/`: 包含架构设计、调度逻辑、任务生命周期等深度文档。
 - `assets/`: 预设的角色模板、团队配置与多语言支持。
