@@ -12,6 +12,7 @@ from exception import TogoException
 from model.dbModel.gtDept import DeptRoomSpec
 from model.dbModel.gtRoom import GtRoom
 from model.dbModel.gtRoomMessage import GtRoomMessage
+from model.dbModel.gtScheculeTask import GtScheculeTask
 from model.dbModel.gtTeam import GtTeam
 from model.dbModel.gtAgent import GtAgent
 from constants import MessageBusTopic, RoomState, RoomType, SpecialAgent
@@ -31,8 +32,9 @@ class ToolCallContext:
     """工具调用时注入的上下文，包含当前 Agent、工具名和聊天室信息。"""
     agent_id: int
     team_id: int
-    chat_room: ChatRoom
+    chat_room: ChatRoom | None = None
     tool_name: str = ""
+    schedule_task: GtScheculeTask | None = None
 
 _rooms: Dict[str, ChatRoom] = {}  # room_key -> ChatRoom
 _rooms_by_id: Dict[int, ChatRoom] = {}
@@ -87,7 +89,7 @@ async def close_team_rooms(team_id: int) -> None:
 
 async def _restore_room_runtime_state(room: ChatRoom) -> None:
     """恢复单个房间的消息、已读指针和轮次进度。"""
-    gt_room_messages = await gtRoomMessageManager.get_room_messages(room.room_id)
+    gt_room_messages, _ = await gtRoomMessageManager.get_room_messages(room.room_id)
     agent_read_index, speaker_index = await gtRoomManager.get_room_state(room.room_id)
     recovered_from_db = bool(gt_room_messages)
     restored_messages: list[GtRoomMessage] | None = None
@@ -143,14 +145,26 @@ def get_room(room_id: int) -> ChatRoom | None:
     return _rooms_by_id.get(room_id)
 
 
-async def get_room_messages_from_db(room_id: int) -> list[GtRoomMessage]:
+async def get_room_messages_from_db(
+    room_id: int,
+    before_id: int | None = None,
+    limit: int | None = None,
+) -> tuple[list[GtRoomMessage], bool]:
     """从数据库加载房间消息，固定走持久层。"""
-    return await gtRoomMessageManager.get_room_messages(room_id)
+    return await gtRoomMessageManager.get_room_messages(room_id, before_id=before_id, limit=limit)
 
 
 def get_all_rooms() -> List[ChatRoom]:
     """返回所有聊天室实例列表。"""
     return list(_rooms.values())
+
+
+async def get_control_room_for_agent(team_id: int, agent_id: int) -> ChatRoom | None:
+    """返回 operator 与指定 agent 的私聊控制房间（不触发创建）。"""
+    gt_room = await gtRoomManager.get_operator_control_room(team_id, agent_id)
+    if gt_room is None:
+        return None
+    return _rooms_by_id.get(gt_room.id)
 
 
 async def get_or_create_control_room(team_id: int, agent_id: int) -> tuple[ChatRoom, bool]:
