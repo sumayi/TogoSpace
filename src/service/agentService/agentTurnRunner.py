@@ -269,10 +269,13 @@ class AgentTurnRunner:
         next_tool_choice: str | None = None
 
         while True:
-            # 检查 operator 私聊控制房间是否有待即时插入的消息
+            # 检查 operator 私聊控制房间是否有待即时插入或未读的消息
             if self._history.is_safe_for_immediate_insert():
                 ctrl_room = await roomService.get_control_room_for_agent(self.gt_agent.team_id, self.gt_agent.id)
-                if ctrl_room is not None and ctrl_room.has_pending_immediate_messages(self.gt_agent.id):
+                if ctrl_room is not None and (
+                    ctrl_room.has_pending_immediate_messages(self.gt_agent.id) or
+                    ctrl_room.has_unread_messages(self.gt_agent.id)
+                ):
                     await self._inject_immediate_messages(ctrl_room)
 
             result = await self._advance_step(room, tools, tool_choice=next_tool_choice)
@@ -654,7 +657,19 @@ class AgentTurnRunner:
             detail=tool_name, metadata=tool_metadata,
         )
         registered_tool: RegisteredTool | None = self.tool_registry.get_registered_tool(tool_name)
-        assert registered_tool is not None, f"tool not registered: {tool_name}"
+        if registered_tool is None:
+            error_msg = f"工具 '{tool_name}' 未找到，请使用已有工具完成行动。"
+            logger.warning("tool not registered: agent_id=%d, tool=%s", self.gt_agent.id, tool_name)
+
+            final_message = llmApiUtil.OpenAIMessage.tool_result(
+                output_item.tool_call_id, json.dumps({"success": False, "message": error_msg}, ensure_ascii=False)
+            )
+
+            await self._history.finalize_history_item(
+                history_id=output_item.id, message=final_message, status=AgentHistoryStatus.FAILED, error_message=error_msg
+            )
+            await self._finish_activity(tool_activity.id, status=AgentActivityStatus.FAILED, error_message=error_msg)
+            return TurnStepResult.TOOL_EXECUTE_FAILED_FINISH
 
         if registered_tool.self_interrupt:
             if AgentHistoryTag.SELF_INTERRUPT in output_item.tags:

@@ -69,6 +69,7 @@ application = tornado.web.Application([
     # System Status & Quick Init (V13)
     (r"/system/status.json",                         systemController.SystemStatusHandler),
     (r"/system/schedule/resume.json",                systemController.SystemScheduleResumeHandler),
+    (r"/system/database/backup.json",                systemController.SystemDatabaseBackupHandler),
     (r"/config/quick_init.json",                     initController.QuickInitHandler),
 
     # Role templates
@@ -84,6 +85,7 @@ application = tornado.web.Application([
     (r"/agents/(\d+)/tasks.json",                   agentController.AgentTasksHandler),
     (r"/agents/(\d+)/resume.json",                  agentController.AgentResumeHandler),
     (r"/agents/(\d+)/stop.json",                    agentController.AgentStopHandler),
+    (r"/agents/(\d+)/clear_data.json",              agentController.AgentClearDataHandler),
     (r"/agents/(\d+)/supervise.json",               superviseController.AgentSuperviseHandler),
     (r"/teams/(\d+)/agents/save.json",              agentController.TeamAgentsSaveHandler),
     (r"/teams/(\d+)/agents/([^/]+).json",           agentController.AgentDetailHandler),
@@ -101,6 +103,7 @@ application = tornado.web.Application([
     (r"/teams/list.json",                           teamController.TeamListHandler),
     (r"/teams/create.json",                         teamController.TeamCreateHandler),
     (r"/teams/(\d+).json",                          teamController.TeamDetailHandler),
+    (r"/teams/(\d+)/export_preset.json",            teamController.TeamPresetExportHandler),
     (r"/teams/(\d+)/modify.json",                   teamController.TeamModifyHandler),
     (r"/teams/(\d+)/delete.json",                   teamController.TeamDeleteHandler),
     (r"/teams/(\d+)/set_enabled.json",              teamController.TeamSetEnabledHandler),

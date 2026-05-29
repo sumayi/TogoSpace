@@ -10,9 +10,9 @@ from dal.db import gtRoomManager, gtTeamManager, gtAgentManager, gtRoleTemplateM
 from model.dbModel.gtAgent import GtAgent
 from model.dbModel.gtRoom import GtRoom
 from model.dbModel.gtTeam import GtTeam
-from service import roomService, teamService, agentService
+from service import roomService, teamService, agentService, exportService
 from util import assertUtil
-from util.configTypes import TeamRoomConfig
+from util.configTypes import TeamRoomPreset
 
 
 def _split_team_config(config: dict | None) -> tuple[str, dict]:
@@ -46,7 +46,7 @@ async def _resolve_room_agent_ids(team_id: int, agent_names: list[str]) -> list[
     return agent_ids
 
 
-async def _to_gt_room(team_id: int, room: TeamRoomConfig) -> GtRoom:
+async def _to_gt_room(team_id: int, room: TeamRoomPreset) -> GtRoom:
     gt_agent_ids = await _resolve_room_agent_ids(team_id, list(room.agents))
     return GtRoom(
         id=room.id,
@@ -102,7 +102,7 @@ class UpdateTeamRequest(BaseModel):
     working_directory: str | None = None
     config: dict | None = None
     agents: list[TeamAgentUpdateItem] | None = None
-    preset_rooms: list[TeamRoomConfig] | None = None
+    preset_rooms: list[TeamRoomPreset] | None = None
 
 
 class SetEnabledRequest(BaseModel):
@@ -172,6 +172,7 @@ class TeamDetailHandler(BaseHandler):
                 "id": agent.id,
                 "name": agent.name,
                 "i18n": agent.i18n or {},
+                "employee_number": agent.employee_number,
                 "role_template_id": agent.role_template_id,
             }
             for agent in agents
@@ -218,6 +219,13 @@ class TeamDetailHandler(BaseHandler):
                 "rooms": room_items,
             }
         )
+
+
+class TeamPresetExportHandler(BaseHandler):
+    """GET /teams/{id}/export_preset.json - 导出单个 Team 为 preset JSON。"""
+
+    async def get(self, team_id_str: str) -> None:
+        self.return_json(await exportService.export_team_preset(int(team_id_str)))
 
 
 class TeamModifyHandler(BaseHandler):

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
+from datetime import datetime
 from typing import Optional
 
 import aiosqlite
@@ -11,7 +13,8 @@ from peewee_async.databases import AioDatabase
 from peewee_async.pool import PoolBackend
 from peewee_async.utils import ConnectionProtocol
 
-from db import check_database_initialized, migrate_database
+import appPaths
+from db import check_database_initialized, migrate_database, resolve_db_path
 from model.dbModel.base import bind_database
 
 logger = logging.getLogger(__name__)
@@ -155,3 +158,25 @@ def is_ready() -> bool:
 
 def get_db_path() -> Optional[str]:
     return _db_path
+
+
+def backup_database() -> str:
+    db_path = get_db_path()
+    if db_path is None:
+        raise RuntimeError("ormService not started")
+
+    source_path = resolve_db_path(db_path)
+    backup_dir = os.path.join(appPaths.DATA_DIR, "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = os.path.join(
+        backup_dir,
+        f"{source_path.stem}_{timestamp}{source_path.suffix or '.db'}",
+    )
+
+    with sqlite3.connect(str(source_path)) as source_conn, sqlite3.connect(backup_path) as backup_conn:
+        source_conn.backup(backup_conn)
+
+    logger.info("Database backup created: source=%s, backup=%s", source_path, backup_path)
+    return backup_path
