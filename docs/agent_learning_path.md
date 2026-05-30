@@ -1,588 +1,810 @@
 # TogoSpace 智能体学习路径
 
-本文档以 TogoSpace 项目为教材，按从易到难的顺序，循序渐进带你理解多智能体系统的核心概念与实现。
+本文档面向第一次接触 TogoSpace 的开发者和 Agent，目标是用一条从运行体验到核心机制、再到扩展开发的路线，带你理解这个多 Agent 聊天室框架。
+
+## 审核结论
+
+原文的章节顺序是合理的：先跑起来，再理解 LLM、工具、Agent 生命周期、调度、历史和压缩。但它和当前项目已有几处偏差，需要修正：
+
+- 旧路径较多：例如 `src/service/llmService.py`、`src/service/roomService.py`、`gtTeamModel.py` 已经分别演进为包目录或新文件名。
+- 启动恢复流程写成旧版 `load_all_team()` / `load_rooms_from_db()`，当前入口是 `backend_main.py` 调用 `teamService.restore_team()` 恢复每个启用团队。
+- 工具名 `finish_chat_turn` 已不再是当前实现，结束本轮的基础工具是 `finish_action`。
+- Function Calling 示例仍停留在手写 JSON schema，当前工具 schema 由 `FuncTool` 基于函数签名和 docstring 自动生成。
+- 缺少上手必需主题：配置与 preset 的边界、Web 前端与 TUI、HTTP/WebSocket 协议、测试体系、日志排障、团队热更新、演示模式和发布文档。
+
+下面是按当前仓库状态补全后的学习路径。
 
 ## 学习地图总览
 
+```text
+第 0 章  学习方法与代码导航        → 建立阅读方式
+第 1 章  环境搭建与首次运行        → 跑起来，建立感性认识
+第 2 章  项目骨架与四层架构        → 知道代码应该放在哪
+第 3 章  配置、preset 与运行目录   → 理解数据从哪里来、写到哪里
+第 4 章  后端启动与运行时恢复      → 看懂服务怎么从 DB 恢复
+第 5 章  HTTP API 与 WebSocket     → 理解前后端协议边界
+第 6 章  Web 前端与 TUI            → 理解两个前端如何消费同一后端
+第 7 章  LLM 调用机制              → Agent 的大脑
+第 8 章  Function Calling          → Agent 的手脚
+第 9 章  Agent 生命周期            → 从配置成员到运行时实例
+第10章  房间、消息与调度轮转       → 多 Agent 如何有序发言
+第11章  对话历史与活动日志         → Agent 的记忆与可观测性
+第12章  Driver 策略模式            → Native / TSP / Claude SDK 的差异
+第13章  Token 压缩与 Prompt Cache  → 长上下文治理
+第14章  持久化、重启与热更新       → 服务重启后的状态找回
+第15章  测试与排障                 → 怎么验证和定位问题
+第16章  实战：添加一个工具         → 动手扩展
 ```
-第1章  环境搭建与首次运行    → 跑起来，建立感性认识
-第2章  项目骨架与架构        → 理解分层设计，建立全局观
-第3章  LLM 调用机制          → Agent 的大脑：如何与模型通信
-第4章  Function Calling      → Agent 的手脚：工具调用原理
-第5章  Agent 生命周期        → 从创建到销毁的完整旅程
-第6章  对话历史管理          → Agent 的记忆系统
-第7章  调度与轮转            → 多 Agent 如何有序发言
-第8章  Driver 策略模式       → 三种驱动方式的共性与差异
-第9章  Token 压缩            → 长对话如何控制上下文窗口
-第10章 事件总线              → 发布/订阅解耦通信
-第11章 持久化与状态恢复      → 服务重启后的状态找回
-第12章 实战：从零添加一个工具 → 动手写代码
+
+推荐阅读顺序：
+
+```text
+0 → 1 → 2 → 3 → 4 → 5 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16
+                          ↘
+                            6 可以在理解接口后再看
 ```
 
----
+## 第 0 章 学习方法与代码导航
 
-## 第1章 环境搭建与首次运行
+**目标**：用正确粒度读代码，避免陷入细节。
 
-**目标**：跑起项目，理解它是什么。
+### 0.1 先读稳定入口
 
-### 1.1 搭建环境
+优先从这些文件开始：
+
+| 文件 | 你要看什么 |
+|------|------------|
+| `AGENTS.md` | 分层规则、启动方式、测试命令、目录约定 |
+| `src/backend_main.py` | 后端 4 阶段启动、调度闸门开启、shutdown 顺序 |
+| `src/route.py` | 所有 HTTP / WebSocket 路由 |
+| `src/constants.py` | 核心枚举：Room、Agent、Driver、Tool、Schedule、Task 状态 |
+| `docs/tech/01_architecture/architecture.md` | 架构总览，部分细节可能比代码稍旧，读时以代码为准 |
+| `docs/tech/04_agent/*.md` | Agent、调度、Driver、压缩等专题文档 |
+
+### 0.2 读代码时的三条主线
+
+1. 用户在前端发消息后，如何变成房间消息和调度任务。
+2. Agent 领取任务后，如何调用 LLM、执行工具、结束回合。
+3. 服务重启后，Team、Agent、Room、History、Task 如何恢复。
+
+只要能把这三条主线串起来，项目大多数功能都能定位。
+
+## 第 1 章 环境搭建与首次运行
+
+**目标**：跑起后端和 Web 前端，看到一个真实的多 Agent 聊天室。
+
+### 1.1 后端环境
+
+项目使用 Python 3.11+，仓库通常配套 `.venv`：
 
 ```bash
-# Python 3.11+
-python3.12 -m venv .venv
+python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-
-# 安装 Git LFS（gTSP 二进制文件用）
-brew install git-lfs && git lfs pull
-
-# 启动后端
 .venv/bin/python3 src/backend_main.py --port 8080
-
-# 启动前端（新终端）
-cd frontend && npm install && npm run dev
 ```
 
-### 1.2 观察现象
+如果已经存在 `.venv`，直接使用它即可。
 
-打开 `http://localhost:5173`，你应该看到：
+### 1.2 Web 前端
 
-- **设置页（齿轮图标）** → 配置 LLM API（key、地址、模型名）
-- **控制台** → 一个聊天室，多个 Agent 角色在讨论
-- 调度闸门 → 配置好 LLM 后闸门打开，Agent 开始工作
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-### 1.3 关键文件
+默认 Vite 开发服务器通过代理连接 `http://127.0.0.1:8080`。如需指定后端：
+
+```bash
+cd frontend
+VITE_API_BASE_URL=http://127.0.0.1:8080 npm run dev
+```
+
+打开 `http://localhost:5173` 后重点观察：
+
+- 顶部团队选择和调度状态。
+- Console 页的房间列表、Agent 列表、消息流。
+- Settings 页的模型服务、团队、角色模板、运行设置。
+- 首次未配置 LLM 时会出现快速初始化或调度阻塞提示。
+
+### 1.3 TUI 前端
+
+```bash
+.venv/bin/python3 tui/tui_main.py --base-url http://127.0.0.1:8080
+```
+
+TUI 适合快速排障和终端自动化观察。它和 Web 前端消费同一套 HTTP / WebSocket API。
+
+## 第 2 章 项目骨架与四层架构
+
+**目标**：理解代码为什么这样分层。
+
+TogoSpace 后端遵循四层架构：
+
+```text
+controller → service → dal → model → util
+```
+
+| 层 | 典型目录 | 职责 |
+|----|----------|------|
+| controller | `src/controller/` | HTTP / WebSocket 入参解析、响应封装、调用 service |
+| service | `src/service/` | 有状态业务逻辑、调度、Agent 运行时、工具执行 |
+| dal | `src/dal/` | 数据库读写封装 |
+| model | `src/model/` | 数据模型、Peewee ORM 模型、运行时数据结构 |
+| util | `src/util/` | 通用工具，不依赖业务层 |
+
+下层不能反向依赖上层。同层可以互相引用，但仍要控制耦合。
+
+### 2.1 用一个接口追踪调用链
+
+以团队列表为例：
+
+```text
+GET /teams/list.json
+  → src/controller/teamController.py
+  → src/service/teamService.py 或 dal manager
+  → src/dal/db/gtTeamManager.py
+  → src/model/dbModel/gtTeam.py
+```
+
+以房间消息为例：
+
+```text
+POST /rooms/{room_id}/messages/send.json
+  → src/controller/roomController.py
+  → src/service/roomService/
+  → src/service/messageBus.py
+  → src/service/schedulerService.py
+  → src/service/agentService/
+```
+
+### 2.2 命名提醒
+
+仓库里有历史命名痕迹，例如 `GtScheculeTask` 中的 `Schecule` 拼写。学习时按现有文件名查找，不要自行改名。
+
+## 第 3 章 配置、preset 与运行目录
+
+**目标**：分清“随源码提交的预设”和“用户私有运行配置”。
+
+### 3.1 preset 与 config
+
+| 类别 | 内容 | 当前路径 | 是否提交 |
+|------|------|----------|----------|
+| preset | 内置角色模板、团队模板 | `assets/preset/role_templates/*.json`、`assets/preset/teams/*.json` | 是 |
+| config | LLM 服务、API key、持久化、运行设置 | `STORAGE_ROOT/setting.json` | 否 |
+
+相关代码：
+
+- `src/appPaths.py`：定义 `STORAGE_ROOT`、`ASSETS_DIR`、`PRESET_DIR`、`WORKSPACE_ROOT`。
+- `src/util/configUtil.py`：加载配置。
+- `src/util/configTypes.py`：Pydantic 配置模型。
+- `src/service/presetService.py`：导入 preset。
+
+### 3.2 开发模式运行目录
+
+开发模式默认写入：
+
+```text
+dev_storage_root/
+├── setting.json
+├── data/
+├── logs/backend/
+└── workspace/
+```
+
+打包模式默认写入 `~/.togospace/`。也可以通过环境变量 `STORAGE_ROOT` 覆盖。
+
+### 3.3 学习重点
+
+- `assets/preset/` 是产品默认内容，不应掺入用户 API key。
+- `dev_storage_root/` 是本地运行状态，不应提交。
+- 后端启动后会 `chdir` 到 `src/`，排查相对路径时必须记住这一点。
+
+## 第 4 章 后端启动与运行时恢复
+
+**目标**：看懂 `backend_main.py` 如何把静态配置、数据库和运行时对象组装起来。
+
+当前启动大致分为四段：
+
+```text
+1. 基础 service 启动
+   messageBus → llmService → funcToolService → ormService
+   → persistenceService → agentService → roomService
+   → schedulerService → presetService
+
+2. 导入 preset
+   presetService.import_from_app_config()
+
+3. 准备团队运行时恢复
+   当前主要是阶段日志，真正恢复在下一阶段按 Team 执行
+
+4. 恢复启用中的 Team
+   for enabled team:
+     teamService.restore_team(...)
+
+5. 开启调度闸门
+   schedulerService.start_schedule()
+```
+
+`teamService.restore_team()` 是理解运行时恢复的关键入口：
+
+```text
+同步部门树中的在岗成员
+  → agentService.load_team_agents()
+  → roomService.load_team_rooms()
+  → agentService.restore_team_agents_runtime_state()
+  → roomService.restore_team_rooms_runtime_state()
+  → schedulerService.start_scheduling(team.name)
+```
+
+调度真正能否运行，还要看全局闸门 `ScheduleState`：
+
+- `STOPPED`：未开启或已停止。
+- `BLOCKED`：前置条件不满足，例如未初始化 LLM 或演示只读模式。
+- `RUNNING`：允许激活房间、创建任务、启动 Agent 消费协程。
+
+## 第 5 章 HTTP API 与 WebSocket
+
+**目标**：理解前后端边界。
+
+### 5.1 路由入口
+
+所有 Tornado 路由集中在 `src/route.py`。常用分组：
+
+| 分组 | 路径示例 | Controller |
+|------|----------|------------|
+| 系统状态 | `/system/status.json`、`/system/schedule/resume.json` | `systemController.py` |
+| LLM 配置 | `/config/llm_services/list.json`、`/config/llm_services/test.json` | `settingController.py` |
+| 团队 | `/teams/list.json`、`/teams/{id}/modify.json` | `teamController.py` |
+| 角色模板 | `/role_templates/list.json` | `roleTemplateController.py` |
+| Agent | `/agents/list.json`、`/agents/{id}/resume.json` | `agentController.py` |
+| 房间 | `/rooms/list.json`、`/rooms/{id}/messages/send.json` | `roomController.py` |
+| WebSocket | `/ws/events.json` | `wsController.py` |
+
+### 5.2 WebSocket 事件
+
+后端通过 `messageBus` 发布事件，`wsController` 负责广播给前端。
+
+核心主题定义在 `src/constants.py` 的 `MessageBusTopic`：
+
+```text
+ROOM_MSG_ADDED
+ROOM_MSG_CHANGED
+ROOM_STATUS_CHANGED
+ROOM_ADDED
+AGENT_STATUS_CHANGED
+AGENT_ACTIVITY_CHANGED
+SCHEDULE_STATE_CHANGED
+TEAM_RELOADED
+```
+
+学习建议：先看 `src/service/messageBus.py`，再看 `src/controller/wsController.py`，最后回到前端 `frontend/src/realtime/wsClient.ts`。
+
+## 第 6 章 Web 前端与 TUI
+
+**目标**：理解两个前端如何共享后端能力。
+
+### 6.1 Web 前端
+
+Web 前端是 Vue 3 + TypeScript + Vite。入口与主线：
 
 | 文件 | 作用 |
 |------|------|
-| `src/backend_main.py` | 后端入口，看 `main()` 函数的 4 阶段启动 |
-| `frontend/src/App.vue` | 前端入口 |
-| `frontend/vite.config.ts` | Vite 代理配置（开发时把 `/api` 请求转发到后端） |
+| `frontend/src/main.ts` | Vue 应用入口 |
+| `frontend/src/router.ts` | 路由：Console、Settings、TeamCreate |
+| `frontend/src/App.vue` | 全局布局、主题、调度状态、快速初始化弹窗 |
+| `frontend/src/api.ts` | HTTP API 封装 |
+| `frontend/src/realtime/wsClient.ts` | WebSocket 实时事件 |
+| `frontend/src/pages/ConsolePage.vue` | 聊天控制台 |
+| `frontend/src/pages/SettingsPage.vue` | 设置页 |
 
----
+前端测试使用 Vitest：
 
-## 第2章 项目骨架与架构
-
-**目标**：理解四层架构，知道代码分在哪。
-
-### 2.1 四层架构
-
-阅读 `AGENTS.md` 了解分层规则。核心原则：
-
-```
-controller → service → dal → model → util
-   ↑           ↑        ↑       ↑       ↑
- 接口层      业务层   数据层  数据定义  工具层
+```bash
+cd frontend
+npm run test:run
+npm run build
 ```
 
-禁止下层反向引用上层。这个约束是理解整个项目的前提。
+### 6.2 TUI
 
-### 2.2 对比理解
+TUI 使用 Textual：
 
-以"获取团队列表"为例，追踪调用链：
-
-```
-浏览器请求 GET /teams/list.json
-    ↓
-controller/teamController.py   # 解析参数，调用 service
-    ↓
-service/teamService.py          # 业务逻辑，调用 dal
-    ↓
-dal/db/gtTeamManager.py        # 数据库查询
-    ↓
-model/dbModel/gtTeamModel.py   # 数据表定义
-```
-
-### 2.3 动手实践
-
-- 打开 `src/route.py`，对照 `docs/architecture_diagram.md` 第 12 节，理解所有 API 端点
-- 选一个感兴趣的端点，跟踪代码调用链
-
----
-
-## 第3章 LLM 调用机制
-
-**核心概念**：Agent 的"大脑"如何与 LLM 通信。
-
-### 3.1 关键文件
-
-| 文件 | 重点内容 |
-|------|---------|
-| `src/service/llmService.py` | 所有 LLM 调用的统一入口 |
-| `src/model/coreModel/gtCoreChatModel.py` | `GtCoreAgentDialogContext` — 推理请求的数据结构 |
-| `src/util/configTypes.py` | `LlmServiceConfig` — LLM 配置的 Pydantic 模型 |
-| `src/service/agentService/driver/nativeDriver.py` | Native 驱动如何发起推理 |
-
-### 3.2 阅读路径
-
-1. 先看 `llmService.py`：
-   - `infer_stream()` — 流式推理（边生成边返回）
-   - `infer()` — 非流式推理（等全部生成完）
-   - 理解 LiteLLM 做了什么：根据`LlmServiceType` 将请求路由到不同 Provider（OpenAI / Anthropic / DeepSeek...）
-
-2. 再看 `GtCoreAgentDialogContext`：
-   - `system_prompt` — 告诉 LLM"你是谁"
-   - `messages` — 对话历史
-   - `tools` — 可用的工具列表
-   - `tool_choice` — 强制/可选/不调用工具
-
-3. 理解 LiteLLM 的价值：不用为每个 LLM Provider 写不同的调用代码，一个接口搞定全部。
-
-### 3.3 思考题
-
-- 为什么选择 LiteLLM 而不是直接 `import openai`？
-- `stream=True` 和不 streaming 的区别是什么？什么时候用哪种？
-
----
-
-## 第4章 Function Calling（工具调用）
-
-**核心概念**：Agent 不只是聊天，更能"做事情"——执行工具。
-
-### 4.1 三个关键角色
-
-| 角色 | 代码位置 | 职责 |
-|------|---------|------|
-| **工具定义** | `src/service/funcToolService/core.py` | 注册工具的 schema（name、description、parameters） |
-| **工具注册表** | `src/service/agentService/toolRegistry.py` | 管理每个 Agent 可用哪些工具 |
-| **工具执行** | 各 handler 函数 | 收到 tool_call 后真正执行 |
-
-### 4.2 阅读路径
-
-1. **工具定义**：看 `funcToolService/core.py` 中一个简单工具的定义，比如 `get_time`：
-   ```python
-   # 定义 schema
-   {
-     "type": "function",
-     "function": {
-       "name": "get_time",
-       "description": "获取当前时间",
-       "parameters": {...}
-     }
-   }
-   
-   # 定义执行函数
-   def handle_get_time(args, context):
-       return {"success": True, "time": datetime.now().isoformat()}
-   ```
-
-2. **工具注册**：看 `toolRegistry.py` 如何把工具列表传给 Agent
-
-3. **工具执行流程**：在 `agentTurnRunner.py` 中追踪 `_run_tool_to_item()`：
-   - LLM 返回 `tool_calls`
-   - 解析工具名和参数
-   - 调用 `tool_registry.execute_tool_call()`
-   - 结果写入对话历史，进入下一轮推理
-
-### 4.3 关键工具解读
-
-| 工具 | 为什么重要 |
-|------|-----------|
-| `send_chat_msg` | Agent 通过这个工具"说话" |
-| `finish_chat_turn` | Agent 说"我完了"，触发下一个人发言 |
-| `create_task` / `update_task` | Agent 可以创建和管理任务 |
-
-### 4.4 思考题
-
-- Function Calling 和传统 API 调用有什么区别？
-- 为什么 `send_chat_msg` 和 `finish_chat_turn` 不是 HTTP API，而是做成工具？
-
----
-
-## 第5章 Agent 生命周期
-
-**核心概念**：Agent 从"出生"到"死亡"的完整过程。
-
-### 5.1 关键文件
-
-| 文件 | 职责 |
+| 文件 | 作用 |
 |------|------|
-| `src/service/agentService/core.py` | Agent 的工厂——创建、加载、卸载 |
-| `src/service/agentService/agent.py` | Agent 的门面类 |
-| `src/service/agentService/agentTaskConsumer.py` | Agent 的任务消费循环 |
-| `src/service/agentService/agentTurnRunner.py` | 单轮对话的执行引擎 |
-| `src/model/dbModel/gtAgentModel.py` | Agent 的数据库定义 |
+| `tui/tui_main.py` | 启动入口 |
+| `tui/app.py` | Textual 应用主体 |
+| `tui/api_client.py` | 后端 API 客户端 |
+| `tui/widgets.py` | UI 组件 |
 
-### 5.2 五个状态阶段
+TUI 更适合终端排障；Web 前端更适合完整功能验证。
 
-```
-创建(Created)  →  加载(Runtime)  →  运行(ACTIVE)  →  空闲(IDLE)  →  销毁(Shutdown)
-                                                   ↕
-                                               失败(FAILED)
-```
+## 第 7 章 LLM 调用机制
 
-#### 创建
-- `agentService.load_team_agents()` 遍历团队中的每个 Agent 配置
-- 解析角色模板 `role_template` → 构建 `system_prompt`
-- 确定 `driver` 类型（native / tsp / claude_sdk）
-
-#### 加载
-- `Agent.startup()` → 创建 driver → 注册工具 → 恢复历史 → 状态设为 IDLE
-
-#### 运行 (ACTIVE)
-- `schedulerService` 创建任务 → `AgentTaskConsumer.consume()` 领取
-- 状态变为 ACTIVE，广播 `AGENT_STATUS_CHANGED` 事件
-- 执行 `run_chat_turn()` 进入 Turn Loop
-
-#### 空闲 (IDLE) / 失败 (FAILED)
-- 任务完成后变 IDLE，等待下一次调度
-- 出现异常变 FAILED，需要用户手动恢复（POST /agents/{id}/resume.json）
-
-### 5.3 阅读建议
-
-先跳过复杂的 `agentTaskConsumer` 和 `agentTurnRunner`，只理解 `agent.py` 和 `core.py` 中的整体流程。深入细节留到第7章。
-
----
-
-## 第6章 对话历史管理
-
-**核心概念**：Agent 的"记忆"，如何记住之前的对话。
-
-### 6.1 关键文件
-
-| 文件 | 职责 |
-|------|------|
-| `src/service/agentService/agentHistoryStore.py` | 内存中的对话历史管理 |
-| `src/dal/db/gtAgentHistoryManager.py` | 历史的持久化读写 |
-| `src/model/dbModel/gtAgentHistoryModel.py` | `GtAgentHistory` — 每条历史的字段 |
-
-### 6.2 理解历史结构
-
-每条历史记录有这些核心字段：
-
-```
-role:      system | user | assistant | tool
-content:   文本内容（或 tool_call 的结果）
-tool_calls: JSON数组（assistant 发出工具调用时用）
-seq:       序列号（严格递增）
-status:    INIT | SUCCESS | FAILED | CANCELLED
-```
-
-### 6.3 历史的状态机
-
-```
-INIT (新角色) → 推理 → SUCCESS (含 tool_calls)
-                ↓
-              FAILED / CANCELLED
-
-如果上一条是 SUCCESS + tool_calls：
-  → 执行工具 → 追加 tool 角色记录
-  → 再次推理
-```
-
-### 6.4 对 Agent 的意义
-
-对话历史就是 Agent 的 "prompt chain"——每一轮推理时，整个历史都会被发给 LLM（直到压缩触发）。这意味着：
-
-- Agent 能看到从头到尾的所有讨论
-- 但历史太长会超出 context window → 需要压缩（第9章）
-
----
-
-## 第7章 调度与轮转
-
-**核心概念**：多个 Agent 如何有序地轮流发言。
+**核心概念**：Agent 的“大脑”如何和模型通信。
 
 ### 7.1 关键文件
 
+| 文件 | 重点 |
+|------|------|
+| `src/service/llmService/core.py` | `infer()`、`infer_stream()`、请求组装、Provider 映射 |
+| `src/service/llmService/llmRequestRules.py` | 针对不同 provider 的请求规则修正 |
+| `src/model/coreModel/gtCoreChatModel.py` | `GtCoreAgentDialogContext` 等聊天上下文模型 |
+| `src/util/llmApiUtil.py` | OpenAI 兼容请求/响应结构和 LiteLLM 调用 |
+| `src/util/configTypes.py` | `LlmServiceConfig` |
+| `src/service/agentService/driver/nativeDriver.py` | Native Driver 如何调用 LLM |
+
+### 7.2 请求流
+
+```text
+AgentTurnRunner
+  → Driver
+  → llmService.infer() / infer_stream()
+  → llmApiUtil.send_request_non_stream() / send_request_stream()
+  → LiteLLM
+  → OpenAI / Anthropic / Google / DeepSeek / OpenAI-compatible
+```
+
+`GtCoreAgentDialogContext` 主要包含：
+
+- `system_prompt`：角色、团队、工具使用规则。
+- `messages`：历史消息。
+- `tools`：可用工具 schema。
+- `tool_choice`：是否强制或允许工具调用。
+- `prompt_cache`：prompt cache 配置。
+
+### 7.3 学习问题
+
+- 为什么项目使用 LiteLLM，而不是直接调用某一个厂商 SDK？
+- `infer_stream()` 为什么需要 `on_progress` 回调？
+- `llmRequestRules.py` 解决了哪些 provider 差异？
+
+## 第 8 章 Function Calling
+
+**核心概念**：Agent 通过工具把“想法”变成可执行动作。
+
+### 8.1 当前工具体系
+
 | 文件 | 职责 |
 |------|------|
-| `src/service/schedulerService.py` | 全局调度闸门 |
-| `src/service/roomService/roomScheduler.py` | 单个房间的轮转状态机 |
-| `src/service/roomService/chatRoom.py` | 房间的外观类 |
+| `src/service/funcToolService/tools.py` | 工具函数实现 |
+| `src/service/funcToolService/funcToolType.py` | 从函数签名和 docstring 生成 OpenAI tool schema |
+| `src/service/funcToolService/core.py` | 装载工具、执行工具调用 |
+| `src/service/agentService/toolRegistry.py` | 每个 Agent 运行时可用工具、类别权限、执行结果 |
 
-### 7.2 调度流程
+工具 schema 不再手写大块 JSON，而是由函数定义生成：
 
-```
-1. 用户在聊天室发消息
-     ↓
-2. ChatRoom 收到消息，发布 ROOM_STATUS_CHANGED 事件
-     ↓
-3. schedulerService 收到事件
-     ↓ (检查闸门是否 RUNNING)
-4. 创建 GtScheculeTask → 指派给目标 Agent
-     ↓
-5. Agent 领取任务，进入 Turn Loop
-     ↓
-6. Agent 调用 finish_chat_turn 工具
-     ↓
-7. RoomScheduler 推进 speaker_index → 下一个 Agent
-     ↓
-8. 回到步骤 3 → 下一个 Agent 发言
-     ↓ 直到所有 Agent 都发言完毕 或 达到 max_rounds
-9. 房间状态变为 IDLE
+```python
+def get_time(timezone: Optional[str] = None) -> dict:
+    """获取当前时间
+
+    Args:
+        timezone: 可选的时区名称，如 "Asia/Shanghai"，默认使用本地时区
+    """
 ```
 
-### 7.3 调度的关键设计
+`FuncTool.to_openai_tool()` 会读取类型注解、默认值和 docstring，生成 OpenAI 兼容的 tools schema。
 
-| 概念 | 说明 |
+### 8.2 工具执行流程
+
+```text
+LLM 返回 tool_calls
+  → AgentTurnRunner 解析 OpenAIToolCall
+  → AgentToolRegistry.execute_tool_call()
+  → funcToolService.run_tool_call()
+  → tools.py 中的具体函数
+  → 结果转成纯 JSON
+  → 写回 Agent 历史
+  → 继续下一次 step 或结束 turn
+```
+
+### 8.3 重要工具
+
+| 工具 | 作用 |
 |------|------|
-| **闸门（Schedule Gate）** | STOPPED/BLOCKED/RUNNING 三种状态，控制全局是否允许调度 |
-| **speaker_index** | 循环索引，指向当前发言的 Agent |
-| **skip 跟踪** | 如果某 Agent 跳过了（无话可说），记录跳过次数 |
-| **max_rounds** | 每轮对话的最大回合数，防止无限循环 |
-| **CAS 防重** | `transition_task_status(PENDING, RUNNING)` 用状态前置条件防止重复消费 |
+| `send_chat_msg` | 向当前房间或目标房间发送消息 |
+| `finish_action` | 显式结束当前 Agent 的本轮行动，交棒给下一位 |
+| `start_chat` | 发起私聊 |
+| `wake_up_agent` | 唤醒目标 Agent |
+| `create_task` / `update_task` / `get_task` / `list_tasks` | 协作任务管理 |
+| `save_agent` / `save_dept` / `save_room` 等 | 管理类工具，仅 root leader 可获得 Admin 类别 |
 
-### 7.4 思考题
+### 8.4 权限类别
 
-- 为什么不直接让 Agent 按顺序调用，而是用消息事件驱动？
-- 如果某个 Agent 出错了，其他 Agent 会怎么样？
+工具类别定义在 `ToolCategory`：
 
----
-
-## 第8章 Driver 策略模式
-
-**核心概念**：同一套 Agent 逻辑，三种不同的 LLM 交互方式。
-
-### 8.1 关键文件
-
-| 文件 | 说明 |
-|------|------|
-| `src/service/agentService/driver/base.py` | 抽象基类 |
-| `src/service/agentService/driver/nativeDriver.py` | Native 驱动 |
-| `src/service/agentService/driver/tspDriver.py` | TSP 驱动 |
-| `src/service/agentService/driver/claudeSdkDriver.py` | Claude SDK 驱动 |
-| `src/service/agentService/driver/factory.py` | 工厂方法 |
-
-### 8.2 三种驱动的本质区别
-
-```
-NativeDriver:
-  AgentTurnRunner 控制循环
-    ↓
-  直接调用 llmService.infer()
-    ↓
-  LLM 返回 (文本 或 tool_calls)
-    ↓
-  AgentTurnRunner 执行工具 或 结束
-
-TSPDriver:
-  AgentTurnRunner 控制循环
-    ↓
-  通过 pytspclient (stdio) 发给 gTSP 子进程
-    ↓
-  gTSP 内部执行工具（沙箱隔离）
-    ↓
-  结果返回给 AgentTurnRunner
-
-ClaudeSdkDriver:
-  Driver 自己控制循环（host_managed_turn_loop=False）
-    ↓
-  通过 Claude SDK 与 Anthropic API 交互
-    ↓
-  工具调用通过 MCP Server 桥接
-    ↓
-  AgentTurnRunner 只负责递消息和接收结果
+```text
+Basic / Read / Write / Execute / Admin
 ```
 
-### 8.3 驱动对比
+`toolRegistry.build_runtime_allow_specs()` 会强制包含 `Category:Basic`，root leader 会额外拥有 `Category:Admin`。
 
-| 维度 | Native | TSP | Claude SDK |
-|------|--------|-----|------------|
-| 循环控制 | 宿主 | 宿主 | 驱动自身 |
-| 工具隔离 | 无 | 进程级沙箱 | SDK 封装 |
-| 额外依赖 | 无 | gTSP 二进制 | Anthropic SDK |
-| 适用场景 | 通用 | 需要安全沙箱 | 需要 Claude 特有功能 |
+## 第 9 章 Agent 生命周期
 
-### 8.4 阅读理解
-
-先读懂 `nativeDriver.py`（最纯粹），再对比 `tspDriver.py`（加了子进程通信），最后看 `claudeSdkDriver.py`（循环反向控制）。
-
----
-
-## 第9章 Token 压缩（Context Compaction）
-
-**核心概念**：对话太长超出 LLM 上下文窗口时，如何自动压缩历史。
+**核心概念**：数据库中的 Agent 配置如何变成可运行的 Agent。
 
 ### 9.1 关键文件
 
 | 文件 | 职责 |
 |------|------|
-| `src/service/agentService/compact.py` | 压缩策略的核心实现 |
+| `src/service/agentService/core.py` | Team Agent 的加载、卸载、恢复 |
+| `src/service/agentService/agent.py` | Agent facade |
+| `src/service/agentService/agentTaskConsumer.py` | 数据库任务串行消费 |
+| `src/service/agentService/agentTurnRunner.py` | 单个 turn 的推理和工具调用编排 |
+| `src/service/agentService/promptBuilder.py` | system prompt 构建 |
+| `src/model/dbModel/gtAgent.py` | Agent 数据库模型 |
 
-### 9.2 触发条件
+### 9.2 状态
 
+`AgentStatus` 只有运行态状态：
+
+```text
+IDLE → ACTIVE → IDLE
+          ↓
+        FAILED
 ```
-估算 token > context_window × compact_trigger_ratio (默认 85%)
+
+任务消费状态由 `AgentTaskStatus` 表达：
+
+```text
+PENDING → RUNNING → COMPLETED / FAILED / CANCELLED
 ```
 
-比如 context_window=128K，当估算到 ~109K tokens 时会触发压缩。
+### 9.3 生命周期主线
 
-### 9.3 压缩流程
-
+```text
+teamService.restore_team()
+  → agentService.load_team_agents()
+  → Agent.startup()
+  → 创建 driver
+  → 注册工具
+  → 恢复历史和未完成任务
+  → schedulerService 创建 PENDING task
+  → AgentTaskConsumer.consume()
+  → AgentTurnRunner.run_chat_turn()
 ```
-1. 检测阈值 → 从历史头部开始裁剪    # 保留最后的 N 条，丢弃老旧部分
-2. 调用 LLM 做摘要                  # "请把上面的对话摘要成一段话"
-3. 用摘要替换被丢弃的历史 → 继续推理
-```
 
-### 9.4 可以跳过的细节
+出现异常后 Agent 会进入 `FAILED`，可通过 `/agents/{id}/resume.json` 触发恢复。
 
-`compact.py` 实现较复杂（token 估算、重试、不同模型的窗口大小映射），初学者只需理解**为什么需要压缩、什么条件触发**即可。
+## 第 10 章 房间、消息与调度轮转
 
----
-
-## 第10章 事件总线（Pub/Sub）
-
-**核心概念**：服务之间如何解耦通信。
+**核心概念**：多 Agent 如何在同一个房间里有序发言。
 
 ### 10.1 关键文件
 
 | 文件 | 职责 |
 |------|------|
-| `src/service/messageBus.py` | 事件总线实现 |
-| `src/controller/wsController.py` | WebSocket 消费者 |
-| `src/service/schedulerService.py` | 调度消费者 |
+| `src/service/roomService/chatRoom.py` | 房间状态机、轮次推进、消息追加 |
+| `src/service/roomService/roomScheduler.py` | 房间调度辅助逻辑 |
+| `src/service/roomService/messageStore.py` | 房间消息存储辅助 |
+| `src/service/roomService/core.py` | Room service 对外入口 |
+| `src/service/schedulerService.py` | 全局调度闸门和任务投递 |
+| `src/dal/db/gtScheculeTaskManager.py` | Agent 调度任务 DB 操作 |
 
-### 10.2 7 个事件主题
+### 10.2 房间状态
 
-```
-ROOM_MSG_ADDED          → 新消息来了      → WebSocket 广播
-ROOM_MSG_CHANGED        → 消息被升级      → WebSocket 广播
-ROOM_STATUS_CHANGED     → 发言轮到下一个人  → WebSocket + schedulerService
-ROOM_ADDED              → 新房间创建      → WebSocket 广播
-AGENT_STATUS_CHANGED    → Agent 状态变了  → WebSocket 广播
-AGENT_ACTIVITY_CHANGED  → Agent 活动日志  → WebSocket 广播
-SCHEDULE_STATE_CHANGED  → 调度闸门变了    → WebSocket 广播
-```
-
-### 10.3 设计意图
-
-没有事件总线的话，`roomService` 想通知 `schedulerService` "该调度了"，就得直接持有引用。有事件总线后：
-
-```python
-# roomService 只需：
-messageBus.publish(ROOM_STATUS_CHANGED, data)
-
-# schedulerService 无需被 roomService 知道，自己订阅：
-messageBus.subscribe(ROOM_STATUS_CHANGED, self._on_room_status_changed)
+```text
+INIT → SCHEDULING → IDLE
+          ↑          ↓
+          └── 新消息唤醒
 ```
 
-两个服务完全解耦，互相不知道对方存在。
+`GROUP` 房间中，普通 Agent 轮流发言；`OPERATOR` 通常不会被调度器当作 AI 执行。`PRIVATE` 房间中，`OPERATOR` 回合会等待人类输入。
 
----
+### 10.3 调度流程
 
-## 第11章 持久化与状态恢复
+```text
+用户或 Agent 写入房间消息
+  → ChatRoom.add_message()
+  → 发布 ROOM_MSG_ADDED / ROOM_STATUS_CHANGED
+  → schedulerService 检查 ScheduleState
+  → 创建 GtScheculeTask(type=ROOM_MESSAGE)
+  → agent.start_consumer_task()
+  → AgentTaskConsumer 原子认领 PENDING → RUNNING
+  → AgentTurnRunner 执行本轮
+  → send_chat_msg 写消息
+  → finish_action 结束本轮
+  → ChatRoom.finish_turn() 推进下一位
+```
 
-**核心概念**：服务挂了重启后，怎么找回之前的状态。
+防重依赖数据库任务状态：同一 Agent、同一 room，如果已有 PENDING 或 FAILED 任务，调度器不会重复创建。
 
-### 11.1 关键文件
+## 第 11 章 对话历史与活动日志
+
+**核心概念**：Agent 记住什么，人类如何观察它做过什么。
+
+### 11.1 对话历史
 
 | 文件 | 职责 |
 |------|------|
-| `src/service/persistenceService.py` | 状态恢复的总协调 |
-| `src/dal/db/gtAgentHistoryManager.py` | 对话历史的读写 |
-| `src/dal/db/gtScheculeTaskManager.py` | 任务状态的读写 |
-| `src/dal/db/gtRoomManager.py` | 房间状态的读写 |
+| `src/service/agentService/agentHistoryStore.py` | 内存历史管理 |
+| `src/dal/db/gtAgentHistoryManager.py` | 历史 DB 读写 |
+| `src/model/dbModel/gtAgentHistory.py` | 历史模型 |
 
-### 11.2 恢复什么
+历史状态由 `AgentHistoryStatus` 表示：
 
-启动时 Phase 4 做的事情：
-
-1. **Agent 历史恢复** — 从 DB 加载 `GtAgentHistory`，重建内存中的对话历史
-2. **Task 状态恢复** — 把上一次 crash 前 RUNNING 的任务标记为 FAILED
-3. **房间状态恢复** — 恢复 read_index（每个 Agent 读到哪了）、speaker_index（下一个谁说话）
-
-### 11.3 一个关键细节
-
-`load_agent_history_message()` 加载历史后还会做一次压缩检查：
-```python
-# 如果恢复后的历史超过了压缩阈值，先压缩再继续
-if estimated_tokens > threshold:
-    compact.compact_messages(...)
+```text
+INIT / SUCCESS / FAILED / CANCELLED
 ```
 
-这保证了即使历史在 DB 中存了很久，也不会超过 context window。
+历史 tag 包括：
 
----
-
-## 第12章 实战：从零添加一个工具
-
-**目标**：动手写代码，为 Agent 添加一个新工具。
-
-### 12.1 场景
-
-我们要添加一个 `get_weather` 工具，让 Agent 能查询天气。
-
-### 12.2 第一步：定义工具 schema
-
-在 `src/service/funcToolService/core.py` 添加：
-
-```python
-WEATHER_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "get_weather",
-        "description": "查询指定城市的天气",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "城市名称，如 '北京'"
-                }
-            },
-            "required": ["city"]
-        }
-    }
-}
+```text
+ROOM_TURN_BEGIN
+ROOM_TURN_FINISH
+COMPACT_SUMMARY
+SELF_INTERRUPT
 ```
 
-### 12.3 第二步：实现工具处理函数
+### 11.2 活动日志
+
+活动日志用于前端展示 Agent 的推理、工具调用、状态变化等：
+
+| 文件 | 职责 |
+|------|------|
+| `src/service/agentActivityService.py` | 活动记录服务 |
+| `src/model/dbModel/gtAgentActivity.py` | 活动记录模型 |
+| `frontend/src/components/agent/AgentActivityDialog.vue` | 前端活动详情 |
+
+`AgentActivityType` 包括 `LLM_INFER`、`TOOL_CALL`、`COMPACT`、`REASONING`、`CHAT_REPLY` 等。
+
+## 第 12 章 Driver 策略模式
+
+**核心概念**：同一个 Agent 运行时可以使用不同 LLM 交互策略。
+
+### 12.1 关键文件
+
+| 文件 | 说明 |
+|------|------|
+| `src/service/agentService/driver/base.py` | Driver 基类和 host 协议 |
+| `src/service/agentService/driver/nativeDriver.py` | Native Driver |
+| `src/service/agentService/driver/tspDriver.py` | TSP Driver |
+| `src/service/agentService/driver/claudeSdkDriver.py` | Claude SDK Driver |
+| `src/service/agentService/driver/factory.py` | Driver 工厂 |
+
+### 12.2 三种驱动
+
+```text
+NativeDriver
+  → 宿主 AgentTurnRunner 控制 loop
+  → 直接走 llmService
+  → 适合通用 OpenAI-compatible / Anthropic / Gemini 等服务
+
+TSPDriver
+  → 宿主 AgentTurnRunner 控制 loop
+  → 通过 gtsp 子进程接入工具服务能力
+  → 适合需要进程级工具隔离的场景
+
+ClaudeSdkDriver
+  → Driver 自己控制 turn loop
+  → 通过 Claude SDK / MCP 风格桥接工具
+  → 适合 Claude 特性更强的场景
+```
+
+学习时先读 Native，再读 TSP，最后读 Claude SDK。
+
+## 第 13 章 Token 压缩与 Prompt Cache
+
+**核心概念**：长对话如何控制上下文窗口和成本。
+
+### 13.1 Token 压缩
+
+关键文件：
+
+- `src/service/agentService/compact.py`
+- `docs/tech/04_agent/token_compaction.md`
+
+压缩触发逻辑由配置控制：
+
+```text
+估算 token > context_window × compact_trigger_ratio
+```
+
+触发后会把较早历史压缩成摘要，并保留近期消息继续推理。压缩摘要会以 `COMPACT_SUMMARY` tag 写入历史。
+
+### 13.2 Prompt Cache
+
+关键文件：
+
+- `docs/tech/05_llm/prompt_cache.md`
+- `src/service/llmService/llmRequestRules.py`
+
+Prompt Cache 是面向 provider 的成本和性能优化。学习时重点看：
+
+- 哪些 provider 支持。
+- 请求规则如何标记 cache。
+- 不支持的 provider 如何降级。
+
+## 第 14 章 持久化、重启与热更新
+
+**核心概念**：服务不是一次性内存程序，重启后需要恢复可继续运行的状态。
+
+### 14.1 恢复内容
+
+| 内容 | 代码 |
+|------|------|
+| Team 是否启用、成员配置 | `gtTeamManager.py`、`gtAgentManager.py` |
+| Agent 历史 | `gtAgentHistoryManager.py` |
+| Agent 调度任务 | `gtScheculeTaskManager.py` |
+| 房间消息和已读指针 | `gtRoomMessageManager.py`、`gtRoomManager.py` |
+| 房间运行态 | `roomService.restore_team_rooms_runtime_state()` |
+
+启动时遗留的 RUNNING 任务会被标记为失败，避免重启后卡在运行中。
+
+### 14.2 Team 热更新
+
+当团队、成员、房间或部门结构改变时，通常走：
+
+```text
+teamService.restart_team_runtime()
+  → stop_team_runtime()
+  → restore_team()
+```
+
+也就是先停止该 Team 的消费者和房间运行态，再按数据库配置重建。
+
+## 第 15 章 测试与排障
+
+**目标**：知道改完代码怎么验证，出问题先看哪里。
+
+### 15.1 后端测试
+
+默认测试：
+
+```bash
+./scripts/run_tests.sh
+```
+
+指定范围：
+
+```bash
+./scripts/run_tests.sh tests/unit
+./scripts/run_tests.sh tests/integration/test_chat_flow
+./scripts/run_tests.sh -k "test_name"
+./scripts/run_tests.sh --serial
+```
+
+API 测试需要真实后端子进程和 Mock LLM：
+
+```bash
+./scripts/run_tests.sh tests/api
+```
+
+测试体系详见：
+
+- `docs/tech/07_test/execution_architecture.md`
+- `docs/tech/07_test/case_design_guide.md`
+
+### 15.2 前端测试
+
+```bash
+cd frontend
+npm run test:run
+npm run build
+```
+
+### 15.3 日志入口
+
+开发模式日志在：
+
+```text
+dev_storage_root/logs/backend/
+├── backend.log
+├── backend_warning.log
+├── service/
+├── controller/
+├── dal/
+└── util/
+```
+
+优先看：
+
+- `backend.log`：全局启动、恢复、调度大事件。
+- `service/agentService*.log` 或相关 service 日志：Agent 执行细节。
+- `controller/*.log`：接口异常。
+- `backend_warning.log`：跨模块告警。
+
+### 15.4 常见排障路线
+
+| 问题 | 优先检查 |
+|------|----------|
+| 调度不动 | `/system/status.json`、`ScheduleState`、LLM 是否初始化 |
+| Agent 不说话 | Agent 是否 `FAILED`、是否有 PENDING/FAILED 任务、房间是否 IDLE |
+| 工具没执行 | `toolRegistry` 权限类别、LLM 返回的 tool name、工具参数 JSON |
+| 前端没刷新 | WebSocket 是否连接、`ROOM_*` 事件是否发布 |
+| 重启后状态异常 | Team 是否 enabled、历史和房间 read_index 是否恢复 |
+
+## 第 16 章 实战：添加一个工具
+
+**目标**：按当前工具体系添加一个 `get_weather` 工具。
+
+### 16.1 实现工具函数
+
+在 `src/service/funcToolService/tools.py` 添加函数。参数必须有清晰类型注解，返回值保持 dict：
 
 ```python
-async def handle_get_weather(function_args: dict, context=None) -> dict:
-    city = function_args.get("city", "未知")
-    # 实际项目中这里调用天气 API
+def get_weather(city: str) -> dict:
+    """查询指定城市的天气。
+
+    Args:
+        city: 城市名称，如 "北京"。
+    """
     return {
         "success": True,
         "city": city,
         "temperature": "22°C",
-        "condition": "晴天"
+        "condition": "晴天",
     }
 ```
 
-### 12.4 第三步：注册工具
+如果工具需要当前 Agent、Team 或房间上下文，增加 `_context: ToolCallContext = None` 参数。以下划线开头的参数不会暴露给 LLM，会在执行时由 `funcToolService.run_tool_call()` 注入。
 
-在 `funcToolService/core.py` 的注册环节：
+### 16.2 注册工具
+
+在 `src/service/funcToolService/core.py`：
+
+1. 从 `.tools` import `get_weather`。
+2. 在 `load_func_tools()` 的 `_registry` 中加入 `"get_weather": get_weather`。
+
+在 `src/service/agentService/toolRegistry.py` 的 `CATEGORY_CONFIG` 中加入类别：
 
 ```python
-TOOL_REGISTRY = {
-    # ... 已有工具
-    "get_weather": {
-        "schema": WEATHER_TOOL,
-        "handler": handle_get_weather,
-        "category": ToolCategory.BASIC,
-    }
-}
+"get_weather": ToolCategory.BASIC,
 ```
 
-### 12.5 第四步：验证
+如果这是管理类工具，谨慎放入 `ADMIN`。普通 Agent 默认不会拿到 Admin 工具。
 
-重启后端，创建一个 Agent，看它的工具列表是否包含 `get_weather`。然后在聊天室里让 Agent 查天气，观察调用链路。
+### 16.3 验证
 
----
+建议最少做三层验证：
 
-## 推荐阅读顺序总结
-
-```
-第1章 → 第2章 → 第3章 → 第4章 → 第5章 → 第7章 → (第6章) → 第8章 → 第10章 → 第9章 → 第11章 → 第12章
-
-基础               核心流程                  深入机制              动手
+```bash
+./scripts/run_tests.sh tests/unit tests/integration/test_funcToolService
+./scripts/run_tests.sh --serial -k "tool"
 ```
 
-- **第3-4章**是理解 Agent 最关键的两章（大脑 + 手脚）
-- **第7章**理解多 Agent 协作的核心机制
-- **第6章**和**第9章**解决 Agent 的"记忆"问题（记什么、记多少）
-- **第12章**是最佳验收方式——能否自己加一个工具并跑通
+然后启动后端和前端，在聊天室里让 Agent 查询天气，观察：
 
-## 辅助资料
+- Web 前端活动日志是否出现 `TOOL_CALL`。
+- 后端日志是否出现 `use_tool: tool=get_weather`。
+- Agent 历史是否追加了 tool 结果。
 
-| 资料 | 位置 |
+### 16.4 新增工具的设计原则
+
+- 工具函数返回业务数据，不返回为前端展示拼接的冗余字段。
+- 函数签名保持简单，参数类型使用 `str/int/float/bool/dict/list[T]` 等当前 schema 生成器支持的类型。
+- docstring 第一行写工具用途，`Args:` 写参数语义，这会直接影响 LLM 是否会正确调用。
+- 涉及文件、执行、管理能力时，要明确 ToolCategory，避免越权。
+
+## 辅助资料索引
+
+| 主题 | 文档 |
 |------|------|
-| 项目架构图 | `docs/architecture_diagram.md` |
+| 项目架构 | `docs/tech/01_architecture/architecture.md` |
+| 服务依赖 | `docs/tech/01_architecture/service_dependencies.md` |
+| Controller / Service / DAL 规范 | `docs/tech/02_mvc/` |
 | Driver 架构 | `docs/tech/04_agent/driver_architecture.md` |
-| Turn Runner 详解 | `docs/tech/04_agent/turn_runner_as_driver_host.md` |
+| 调度逻辑 | `docs/tech/04_agent/scheduling_logic.md` |
+| 任务生命周期 | `docs/tech/04_agent/task_lifecycle.md` |
+| 状态持久化 | `docs/tech/04_agent/state_persistence.md` |
 | Token 压缩 | `docs/tech/04_agent/token_compaction.md` |
-| Agent 体验改进 | `docs/improve/agent_experience_improvements.md` |
-| 枚举规范 | `docs/code_rule/enum_conventions.md` |
-| 日志规范 | `docs/code_rule/logger_convention.md` |
+| LLM 配置 | `docs/tech/05_llm/configuration.md` |
+| Prompt Cache | `docs/tech/05_llm/prompt_cache.md` |
+| Web 实体 i18n | `docs/tech/06_i18n/web_entity_contract.md` |
+| 测试体系 | `docs/tech/07_test/execution_architecture.md` |
+| 轮次和消息排障 | `docs/tech/08_debugging/turn_message_debugging.md` |
+| Web 布局排障 | `docs/tech/08_debugging/web_layout_debugging.md` |
+| TUI 布局 | `docs/tech/09_tui/tui_layout.md` |
+| 打包发布 | `docs/tech/10_release/packaging_design.md` |
+| 调度初始化闸门 | `docs/tech/10_release/scheduler_init_gate.md` |
+
+## 学习验收清单
+
+读完本文后，建议用下面的问题自测：
+
+- 能否从 `/rooms/{id}/messages/send.json` 追踪到 Agent 发言？
+- 能否解释 `send_chat_msg` 和 `finish_action` 为什么都是工具？
+- 能否说清楚 `ScheduleState.BLOCKED` 和 Agent `FAILED` 的区别？
+- 能否定位某个 Agent 本轮为什么没有继续发言？
+- 能否新增一个只读工具，并为它选择合理的 ToolCategory？
+- 能否用测试或日志证明一个调度问题发生在哪一层？
